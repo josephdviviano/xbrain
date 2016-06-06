@@ -1,0 +1,163 @@
+3dANOVA3 \
+    -DAFNI_FLOATIZE=YES \
+    -type 5 -alevels 2 -blevels 2 -clevels 37 \
+    -dset 1 1 1 DTI_CMH_H010_im_glm_1stlevel.nii[67] \
+    -dset 1 2 1 DTI_CMH_H010_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 2 DTI_CMH_H011_im_glm_1stlevel.nii[67] \
+    -dset 1 2 2 DTI_CMH_H011_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 3 DTI_CMH_H013_im_glm_1stlevel.nii[67] \
+    -dset 1 2 3 DTI_CMH_H013_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 4 DTI_CMH_H016_im_glm_1stlevel.nii[67] \
+    -dset 1 2 4 DTI_CMH_H016_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 5 DTI_CMH_H020_im_glm_1stlevel.nii[67] \
+    -dset 1 2 5 DTI_CMH_H020_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 6 DTI_CMH_H023_im_glm_1stlevel.nii[67] \
+    -dset 1 2 6 DTI_CMH_H023_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 7 DTI_CMH_H029_im_glm_1stlevel.nii[67] \
+    -dset 1 2 7 DTI_CMH_H029_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 8 DTI_CMH_H030_im_glm_1stlevel.nii[67] \
+    -dset 1 2 8 DTI_CMH_H030_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 9 DTI_CMH_H033_im_glm_1stlevel.nii[67] \
+    -dset 1 2 9 DTI_CMH_H033_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 10 DTI_CMH_H034_im_glm_1stlevel.nii[67] \
+    -dset 1 2 10 DTI_CMH_H034_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 11 DTI_CMH_H036_im_glm_1stlevel.nii[67] \
+    -dset 1 2 11 DTI_CMH_H036_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 12 DTI_CMH_H037_im_glm_1stlevel.nii[67] \
+    -dset 1 2 12 DTI_CMH_H037_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 13 DTI_CMH_H038_im_glm_1stlevel.nii[67] \
+    -dset 1 2 13 DTI_CMH_H038_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 14 DTI_CMH_H040_im_glm_1stlevel.nii[67] \
+    -dset 1 2 14 DTI_CMH_H040_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 15 DTI_CMH_H041_im_glm_1stlevel.nii[67] \
+    -dset 1 2 15 DTI_CMH_H041_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 16 DTI_CMH_H044_im_glm_1stlevel.nii[67] \
+    -dset 1 2 16 DTI_CMH_H044_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 17 DTI_CMH_H053_im_glm_1stlevel.nii[67] \
+    -dset 1 2 17 DTI_CMH_H053_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 18 DTI_CMH_H055_im_glm_1stlevel.nii[67] \
+    -dset 1 2 18 DTI_CMH_H055_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 19 DTI_CMH_H056_im_glm_1stlevel.nii[67] \
+    -dset 1 2 19 DTI_CMH_H056_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 20 DTI_CMH_H065_im_glm_1stlevel.nii[67] \
+    -dset 1 2 20 DTI_CMH_H065_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 21 DTI_CMH_H069_im_glm_1stlevel.nii[67] \
+    -dset 1 2 21 DTI_CMH_H069_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 22 DTI_CMH_H082_im_glm_1stlevel.nii[67] \
+    -dset 1 2 22 DTI_CMH_H082_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 23 DTI_CMH_H085_im_glm_1stlevel.nii[67] \
+    -dset 1 2 23 DTI_CMH_H085_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 24 DTI_CMH_H089_im_glm_1stlevel.nii[67] \
+    -dset 1 2 24 DTI_CMH_H089_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 25 DTI_CMH_H101_im_glm_1stlevel.nii[67] \
+    -dset 1 2 25 DTI_CMH_H101_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 26 DTI_CMH_H102_im_glm_1stlevel.nii[67] \
+    -dset 1 2 26 DTI_CMH_H102_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 27 DTI_CMH_H103_im_glm_1stlevel.nii[67] \
+    -dset 1 2 27 DTI_CMH_H103_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 28 DTI_CMH_H107_im_glm_1stlevel.nii[67] \
+    -dset 1 2 28 DTI_CMH_H107_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 29 DTI_CMH_H153_im_glm_1stlevel.nii[67] \
+    -dset 1 2 29 DTI_CMH_H153_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 30 DTI_CMH_H155_im_glm_1stlevel.nii[67] \
+    -dset 1 2 30 DTI_CMH_H155_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 31 DTI_CMH_H156_im_glm_1stlevel.nii[67] \
+    -dset 1 2 31 DTI_CMH_H156_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 32 DTI_CMH_H160_im_glm_1stlevel.nii[67] \
+    -dset 1 2 32 DTI_CMH_H160_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 33 DTI_CMH_H161_im_glm_1stlevel.nii[67] \
+    -dset 1 2 33 DTI_CMH_H161_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 34 DTI_CMH_H162_im_glm_1stlevel.nii[67] \
+    -dset 1 2 34 DTI_CMH_H162_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 35 DTI_CMH_H163_im_glm_1stlevel.nii[67] \
+    -dset 1 2 35 DTI_CMH_H163_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 36 DTI_CMH_H164_im_glm_1stlevel.nii[67] \
+    -dset 1 2 36 DTI_CMH_H164_ob_glm_1stlevel.nii[67] \
+    -dset 1 1 37 DTI_CMH_H165_im_glm_1stlevel.nii[67] \
+    -dset 1 2 37 DTI_CMH_H165_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 1 DTI_CMH_S019_im_glm_1stlevel.nii[67] \
+    -dset 2 2 1 DTI_CMH_S019_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 2 DTI_CMH_S022_im_glm_1stlevel.nii[67] \
+    -dset 2 2 2 DTI_CMH_S022_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 3 DTI_CMH_S026_im_glm_1stlevel.nii[67] \
+    -dset 2 2 3 DTI_CMH_S026_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 4 DTI_CMH_S029_im_glm_1stlevel.nii[67] \
+    -dset 2 2 4 DTI_CMH_S029_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 5 DTI_CMH_S032_im_glm_1stlevel.nii[67] \
+    -dset 2 2 5 DTI_CMH_S032_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 6 DTI_CMH_S034_im_glm_1stlevel.nii[67] \
+    -dset 2 2 6 DTI_CMH_S034_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 7 DTI_CMH_S035_im_glm_1stlevel.nii[67] \
+    -dset 2 2 7 DTI_CMH_S035_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 8 DTI_CMH_S036_im_glm_1stlevel.nii[67] \
+    -dset 2 2 8 DTI_CMH_S036_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 9 DTI_CMH_S037_im_glm_1stlevel.nii[67] \
+    -dset 2 2 9 DTI_CMH_S037_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 10 DTI_CMH_S039_im_glm_1stlevel.nii[67] \
+    -dset 2 2 10 DTI_CMH_S039_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 11 DTI_CMH_S054_im_glm_1stlevel.nii[67] \
+    -dset 2 2 11 DTI_CMH_S054_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 12 DTI_CMH_S055_im_glm_1stlevel.nii[67] \
+    -dset 2 2 12 DTI_CMH_S055_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 13 DTI_CMH_S057_im_glm_1stlevel.nii[67] \
+    -dset 2 2 13 DTI_CMH_S057_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 14 DTI_CMH_S061_im_glm_1stlevel.nii[67] \
+    -dset 2 2 14 DTI_CMH_S061_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 15 DTI_CMH_S065_im_glm_1stlevel.nii[67] \
+    -dset 2 2 15 DTI_CMH_S065_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 16 DTI_CMH_S079_im_glm_1stlevel.nii[67] \
+    -dset 2 2 16 DTI_CMH_S079_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 17 DTI_CMH_S105_im_glm_1stlevel.nii[67] \
+    -dset 2 2 17 DTI_CMH_S105_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 18 DTI_CMH_S106_im_glm_1stlevel.nii[67] \
+    -dset 2 2 18 DTI_CMH_S106_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 19 DTI_CMH_S141_im_glm_1stlevel.nii[67] \
+    -dset 2 2 19 DTI_CMH_S141_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 20 DTI_CMH_S143_im_glm_1stlevel.nii[67] \
+    -dset 2 2 20 DTI_CMH_S143_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 21 DTI_CMH_S146_im_glm_1stlevel.nii[67] \
+    -dset 2 2 21 DTI_CMH_S146_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 22 DTI_CMH_S147_im_glm_1stlevel.nii[67] \
+    -dset 2 2 22 DTI_CMH_S147_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 23 DTI_CMH_S148_im_glm_1stlevel.nii[67] \
+    -dset 2 2 23 DTI_CMH_S148_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 24 DTI_CMH_S149_im_glm_1stlevel.nii[67] \
+    -dset 2 2 24 DTI_CMH_S149_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 25 DTI_CMH_S150_im_glm_1stlevel.nii[67] \
+    -dset 2 2 25 DTI_CMH_S150_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 26 DTI_CMH_S153_im_glm_1stlevel.nii[67] \
+    -dset 2 2 26 DTI_CMH_S153_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 27 DTI_CMH_S155_im_glm_1stlevel.nii[67] \
+    -dset 2 2 27 DTI_CMH_S155_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 28 DTI_CMH_S156_im_glm_1stlevel.nii[67] \
+    -dset 2 2 28 DTI_CMH_S156_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 29 DTI_CMH_S157_im_glm_1stlevel.nii[67] \
+    -dset 2 2 29 DTI_CMH_S157_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 30 DTI_CMH_S158_im_glm_1stlevel.nii[67] \
+    -dset 2 2 30 DTI_CMH_S158_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 31 DTI_CMH_S159_im_glm_1stlevel.nii[67] \
+    -dset 2 2 31 DTI_CMH_S159_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 32 DTI_CMH_S160_im_glm_1stlevel.nii[67] \
+    -dset 2 2 32 DTI_CMH_S160_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 33 DTI_CMH_S161_im_glm_1stlevel.nii[67] \
+    -dset 2 2 33 DTI_CMH_S161_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 34 DTI_CMH_S162_im_glm_1stlevel.nii[67] \
+    -dset 2 2 34 DTI_CMH_S162_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 35 DTI_CMH_S166_im_glm_1stlevel.nii[67] \
+    -dset 2 2 35 DTI_CMH_S166_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 36 DTI_CMH_S167_im_glm_1stlevel.nii[67] \
+    -dset 2 2 36 DTI_CMH_S167_ob_glm_1stlevel.nii[67] \
+    -dset 2 1 37 DTI_CMH_S170_im_glm_1stlevel.nii[67] \
+    -dset 2 2 37 DTI_CMH_S170_ob_glm_1stlevel.nii[67] \
+    -fa group \
+    -fb cond \
+    -fab groupXcond \
+    -acontr 1 0 HC \
+    -acontr 0 1 SC \
+    -bcontr 1 0 IM \
+    -bcontr 0 1 OB \
+    -acontr 1 -1 HCvsSC \
+    -bcontr 1 -1 IMvsOB \
+    -Abcontr 1 : 1 -1  IMvsOB_HC \
+    -Abcontr 2 : 1 -1 IMvsOB_SC \
+    -bucket meganova.nii.gz 

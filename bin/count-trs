@@ -1,0 +1,8 @@
+#!/bin/bash
+
+for f in $(ls *_rest.nii.gz); do 
+    TR=$(fslhd ${f} | grep dim4 | head -1 | awk '{print $2}' | xargs)
+    SUBJ=$(echo ${f} | cut -d '_' -f 3)
+    echo ${SUBJ} ${TR}
+done > subject-tr-count.csv
+

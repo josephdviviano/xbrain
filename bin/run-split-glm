@@ -1,0 +1,73 @@
+#!/bin/bash
+
+subj=${1}
+ex='compcor'
+assets='/projects/jdv/data/imob/working/assets'
+
+echo 'Running split glm on ${ex} (makes mean of each voxel 1000).'
+
+3dDeconvolve \
+    -input data/${subj}_im.nii*  \
+    -mask data/${subj}_mask.nii* \
+    -num_stimts 6 -force_TR 3 -local_times -jobs 8 \
+    -stim_label 1 IM_AN -stim_times 1 ${assets}/IM_event-times_AN.1D 'BLOCK(1,1)' \
+    -stim_label 2 IM_FE -stim_times 2 ${assets}/IM_event-times_FE.1D 'BLOCK(1,1)' \
+    -stim_label 3 IM_FX -stim_times 3 ${assets}/IM_event-times_FX.1D 'BLOCK(1,1)' \
+    -stim_label 4 IM_HA -stim_times 4 ${assets}/IM_event-times_HA.1D 'BLOCK(1,1)' \
+    -stim_label 5 IM_NE -stim_times 5 ${assets}/IM_event-times_NE.1D 'BLOCK(1,1)' \
+    -stim_label 6 IM_SA -stim_times 6 ${assets}/IM_event-times_SA.1D 'BLOCK(1,1)' \
+    -gltsym 'SYM: -1*IM_FX +0.25*IM_AN +0.25*IM_FE +0.25*IM_HA +0*IM_NE +0.25*IM_SA' \
+    -glt_label 1 emot-fix \
+    -gltsym 'SYM: 0*IM_FX +0.25*IM_AN +0.25*IM_FE +0.25*IM_HA -1*IM_NE +0.25*IM_SA' \
+    -glt_label 2 emot-neut \
+    -fitts data/${subj}_im_glm_tmp_explained.nii \
+    -errts data/${subj}_im_glm_tmp_residuals.nii \
+    -bucket data/${subj}_im_glm_1stlvl.nii \
+    -fout -tout
+
+3dDeconvolve \
+    -input data/${subj}_ob.nii*  \
+    -mask data/${subj}_mask.nii* \
+    -num_stimts 6 -force_TR 3 -local_times -jobs 8 \
+    -stim_label 1 OB_AN -stim_times 1 ${assets}/OB_event-times_AN.1D 'BLOCK(1,1)' \
+    -stim_label 2 OB_FE -stim_times 2 ${assets}/OB_event-times_FE.1D 'BLOCK(1,1)' \
+    -stim_label 3 OB_FX -stim_times 3 ${assets}/OB_event-times_FX.1D 'BLOCK(1,1)' \
+    -stim_label 4 OB_HA -stim_times 4 ${assets}/OB_event-times_HA.1D 'BLOCK(1,1)' \
+    -stim_label 5 OB_NE -stim_times 5 ${assets}/OB_event-times_NE.1D 'BLOCK(1,1)' \
+    -stim_label 6 OB_SA -stim_times 6 ${assets}/OB_event-times_SA.1D 'BLOCK(1,1)' \
+    -gltsym 'SYM: -1*OB_FX +0.25*OB_AN +0.25*OB_FE +0.25*OB_HA +0*OB_NE +0.25*OB_SA' \
+    -glt_label 1 emot-fix \
+    -gltsym 'SYM: 0*OB_FX +0.25*OB_AN +0.25*OB_FE +0.25*OB_HA -1*OB_NE +0.25*OB_SA' \
+    -glt_label 2 emot-neut \
+    -fitts data/${subj}_ob_glm_tmp_explained.nii \
+    -errts data/${subj}_ob_glm_tmp_residuals.nii \
+    -bucket data/${subj}_ob_glm_1stlvl.nii \
+    -fout -tout
+
+# scale up the values in the brain so isc-nifti-kit doesn't freak out
+3dcalc \
+    -prefix data/${subj}_im_glm_residuals.nii \
+    -a data/${subj}_im_glm_tmp_residuals.nii \
+    -b data/${subj}_mask.nii.gz \
+    -expr 'a+b*1000'
+3dcalc \
+    -prefix data/${subj}_im_glm_explained.nii \
+    -a data/${subj}_im_glm_tmp_explained.nii \
+    -b data/${subj}_mask.nii.gz \
+    -expr 'a+b*1000'
+3dcalc \
+    -prefix data/${subj}_ob_glm_residuals.nii \
+    -a data/${subj}_ob_glm_tmp_residuals.nii \
+    -b data/${subj}_mask.nii.gz \
+    -expr 'a+b*1000'
+3dcalc \
+    -prefix data/${subj}_ob_glm_explained.nii \
+    -a data/${subj}_ob_glm_tmp_explained.nii \
+    -b data/${subj}_mask.nii.gz \
+    -expr 'a+b*1000'
+
+rm ${subj}_im_glm_tmp_explained.nii
+rm ${subj}_ob_glm_tmp_explained.nii
+
+#gunzip data/${ex}/${subj}_im_glm_residuals.nii.gz
+#gunzip data/${ex}/${subj}_ob_glm_residuals.nii.gz

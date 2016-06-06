@@ -1,0 +1,13 @@
+The ability to detect meaningful group-level, or subgroup-level, differences in fMRI experiments is constrained by the quality of the model used to detect cognitively-relevant signals in the data.
+Despite numerous demonstrations that the heamodynamic response function (HRF) does not generalize across individuals or brain regions, it is still the dominant model used in the analysis of task-based fMRI experiments [1].
+Here, we demonstrate that the residual time series of a standard general-linear model analysis using the cannonical HRF are are significantly correlated between participants in an imitation/observation social cognition task known to activate the mirror-neuron network [2-4].
+A sample of 50 healthy controls and 37 individuals with schizphrenia (ages 18-50) underwent two fMRI scans while performing the imitate/observe task. Functional data was parcellated into 264 equally-sized ROIs covering the entire brain. All comparisons were done on an ROI-wise basis.
+Traditional contrasts of the GLM beta weights are not powerful enough to find any group-level differences,despite substantial social cognitive impairments in this population [5], but did replicate previous findings of greater mirror neuron activity during imitation than during observation.
+In contrast, the residual cross-brain correlations uncovered many ROIs that would differently synchronize between groups and between contrasts, including some ROIs that show an interaction. In all cases, these significant ROIs contained some differences detected by the GLM, but also a large number of regions missed entirely by the HRF-constrained analysis.
+We propose that this new analysis approach will be useful in detecting subtle differences in brain function missed in traditional analysis. Furthermore this approach offers new avenues for doing single-subject based analysis, by allowing for the correlation of a single-subject's time series against a standard test-database of healthy controls brains to detect ROIs that are behaving abnormally during the execution of a task.
+
+[1] The continuing challenge of understanding and modeling hemodynamic variation in fMRI. Handwerker et al, 2012. Neuroimage 16(2): 1017–1023.
+[2] Cortical mechanisms of human imitation. Iacoboni et al, 1999. Science 286: 2526-2528.
+[3] Inter-subject correlation in fMRI: Method validation against stimulus-model based analysis. Pujula et al, 2012. Plos One 8(8): e41196.
+[4] A versatile software package for inter-subject correlation based analysis of fMRI. Kauppi et al, 2014. Frontiers in Neuroinfromatics 8: article 2.
+[5] Social cognition in schizophrenia. Green et al, 2015. Nature Neuroscience 16: 620-631.

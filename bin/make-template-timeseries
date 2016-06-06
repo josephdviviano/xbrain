@@ -1,0 +1,25 @@
+#!/bin/bash
+subjects=$(cat assets/template_IM.csv)
+epi-xbrain-template \
+    --mask data/anat_EPI_mask_allsubj.nii.gz \
+    --var=outputs/template_variances_im.csv \
+    outputs/template_im.npy \
+    assets/atlas/anat_MNI_shen_268-resamp.nii.gz \
+    ${subjects}
+
+subjects=$(cat assets/template_OB.csv)
+epi-xbrain-template \
+    --mask data/anat_EPI_mask_allsubj.nii.gz \
+    --var=outputs/template_variances_ob.csv \
+    outputs/template_ob.npy \
+    assets/atlas/anat_MNI_shen_268-resamp.nii.gz \
+    ${subjects}
+
+subjects=$(cat assets/template_REST.csv)
+epi-xbrain-template \
+    --mask data/anat_EPI_mask_allsubj.nii.gz \
+    --var=outputs/template_variances_rest.csv \
+    outputs/template_rest.npy \
+    assets/atlas/anat_MNI_shen_268-resamp.nii.gz \
+    ${subjects}
+

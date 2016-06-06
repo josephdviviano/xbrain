@@ -1,0 +1,20 @@
+#!/bin/bash
+
+subjlist=${1}
+
+while read line; do
+
+    mkdir -p ../../../epitome/IMOB/${line}/T1/SESS01/RUN01
+    cp /archive/data-2.0/DTI/CMH/data/nifti/${line}/*BRAVO* ../../../epitome/IMOB/${line}/T1/SESS01/RUN01/
+
+    mkdir -p ../../../epitome/IMOB/${line}/REST/SESS01/RUN01
+    cp /archive/data-2.0/DTI/CMH/data/nifti/${line}/*REST* ../../../epitome/IMOB/${line}/REST/SESS01/RUN01/
+
+    mkdir -p ../../../epitome/IMOB/${line}/IMOB/SESS01/RUN01
+    cp /archive/data-2.0/DTI/CMH/data/nifti/${line}/*IMITATE* ../../../epitome/IMOB/${line}/IMOB/SESS01/RUN01/
+
+    mkdir -p ../../../epitome/IMOB/${line}/IMOB/SESS01/RUN02
+    cp /archive/data-2.0/DTI/CMH/data/nifti/${line}/*OBSERVE* ../../../epitome/IMOB/${line}/IMOB/SESS01/RUN02/
+
+done < ${subjlist}
+

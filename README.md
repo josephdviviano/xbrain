@@ -8,7 +8,7 @@
 
 **code/**
 
-+ clone from: https://bitbucket.org/josephdviviano/xbrain-2015
++ clone from: https://bitbucket.org/josephdviviano/xbrain
 
 **app for ISC analysis**
 

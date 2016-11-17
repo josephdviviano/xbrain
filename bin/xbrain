@@ -1,0 +1,493 @@
+#!/usr/bin/env python
+"""
+xbrain is a tool for predicting non-neural scores of subjects using MRI data
+features.
+
+Usage:
+    xbrain [options] <database>
+
+Arguments:
+    <database>      a .csv file containing MRI data (X) and non-neural data (Y)
+
+Options:
+    --timeseries    A comma-seperated list of timeseries .csv (2D) inputs to use as predictors.
+    --statmaps      A comma-seperated list of statmap .nii.gz (3D) inputs to use as predictors.
+    --predict       Column name in database to predict.
+    --roi_mask      A ROI .nii.gz file with the same dimensions as all input statmaps and the same number of non-zero ROIs as there are unique timeseries.
+    --pct_template  Proportion (0 < p < 1) of population to serve as the template population for the outer loop [default: 0.1]
+    --n             Number of monte-carlo simulations to run for the outer loop [default: 10]
+    --p             Proportion (0 < p < 1) of template subjects taken for each outer loop simulation [default: 0.5]
+    --k             Number of folds done for the inner loop cross-validation [default: 5]
+    --debug         Verbose outputs.
+
+DETAILS
+
+The xbrain analysis uses a double-cross validation approach to demonstrate
+whether the similarities in neural architecture or activity between a held-out
+'template' and independent 'sample' population (X) is predictive of non-neural
+variables of interest (Y). For example, demographics (age, sex), cognitive
+scores (IQ, TASIT), or clinical variables (medications taken, number of hospital
+visits in the last year).
+
+To validate this approach, the members of the template must be shuffled, as well
+as the comparison group. These form the outer and inner loop, respectively.
+
+**outer loop: template population**
+
+The template population is first defined as a small proportion of the total
+sample (e.g., --pct_template=0.1, or 10 %) with values close to the median non-
+neural score of interest. Therefore, the template represents a 'normal'
+participant with respect to that variable. For each iteration of the outer loop,
+a random subsample (e.g., --p=0.5, or 50%) of the total held-out population
+is used to construct a single template to compare with the participants in the
+inner loop. This ensures that the results generalize across multiple templates,
+and are not template specific. This outer loop is repeated a set number of times
+(e.g., --n=10 times).
+
+For each template, the average time-series is calculated across all ROIs to
+generate a template set of timeseries.
+
+Due to a 'large' MRI population being in the 100s of subjects, and therefore a
+template population can only be assumed to be 10-50 people, monte-carlo
+simulations are used instead of K-fold validation.
+
+**inner loop: sample**
+
+The sample population is defined as K distinct folds (e.g., --k=5, or 5 folds)
+of the remaining population, because we have more data at our disposal and k-
+fold cross validation is more robust to major outliers, which are likely in
+heterogenous psychiatric populations. Briefly, K-fold cross validation splits
+the population into a test set (n/K) and training set (the remainder). For each
+fold, cross-brain correlations are calculated for each individual against the
+template, and the training data is used to train a random forest regression
+model to predict the non-neural variable of interest. The performance of the
+model is evaluated against the test set, and performance measures are averaged
+across all folds.
+
+These averaged measures are further averaged across all outer loops to assess
+the overall stability of the algorithm.
+
+**features**
+
+The primary feature used is cross-brain correlation of fMRI time series, but
+this tool will also accept 3D stat maps (i.e., GLM scores, FA). These can be
+combined because for each subject, we collapse the timeseries down to a vector
+of cross brain correlation values the same length as the number of ROIs.
+
+In order to do this, a mask with nonzero ROIs must be supplied. The number of
+nonzero ROIs must be the same as the number of timeseries supplied. The average
+statistic from within each ROI will be taken as the feature for that ROI.
+
+During training and testing, the cross brain correlation values and statistic
+vectors will be concatenated. One must be careful not to add too many
+features into the model, as this can lead to overfitting and poor
+generalizability.
+
+xbrain -h or --help prints this message.
+"""
+import sys, os
+import pickle
+import re
+import time
+import datetime
+import collections
+import tables as tb
+from math import isnan
+
+from . import docopt.docopt as docopt
+
+import matplotlib.pyplot as plt
+plt.rcParams['figure.figsize'] = (15, 10)
+plt.style.use('ggplot')
+
+import numpy as np
+from scipy import stats
+from scipy.stats import mode
+import pandas as pd
+import h5py as h5
+import nibabel as nib
+
+from sklearn import preprocessing
+from sklearn import grid_search
+from sklearn.cross_validation import KFold
+from sklearn.cross_validation import StratifiedKFold
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Lasso
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error as mse
+
+logging.basicConfig(level=logging.WARN, format="[%(name)s] %(levelname)s: %(message)s")
+logger = logging.getLogger(os.path.basename(__file__))
+
+def pickleIt(my_data,save_path):
+    f = open(save_path, 'wb')
+    pickle.dump(my_data, f)
+    f.close()
+
+def CVLoop(model_clf, hyperparams, X_train, y_train):
+    """
+    Uses cross validation to do a grid search on the hyperparameter dictionary
+    input.
+    """
+    clf = grid_search.GridSearchCV(model_clf, hyperparams, cv=3,verbose=0)
+    clf.fit(X_train, y_train)
+
+    return clf
+
+def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i):
+
+    hp_dict = collections.defaultdict(list) #store best hyper-parameters for each fold
+
+    clf = CVLoop(model_clf, hyperparams, X_train, y_train)
+    for hp in hyperparams:
+        hp_dict[hp].append(clf.best_estimator_.get_params()[hp])
+
+    r_train = stats.pearsonr(clf.predict(X_train), y_train)
+    r_test = stats.pearsonr(clf.predict(X_test), y_test)
+    R2_train = clf.score(X_train, y_train)
+    R2_test = clf.score(X_test, y_test)
+    MSE_train = mse(clf.predict(X_train), y_train)
+    MSE_test = mse(clf.predict(X_test), y_test)
+
+    # visualization
+    plt.scatter(clf.predict(X_test),  y_test)
+    plt.savefig('test_predicit_{}.jpg'.format(i))
+    plt.close()
+
+    # check feature importance (QC for HC importance)
+    # for fid in np.arange(10):
+    #     model_clf.fit(X_train[fid],y_train[fid])
+    #     feat_imp = model_clf.feature_importances_
+    #     print
+    #     print 'fid: {} r: {}'.format(fid, zip(*CV_r_valid)[0][fid])
+    #     print feat_imp[70:], np.argsort(feat_imp)[70:]
+
+    return {'r_train':r_train,
+            'r_test':r_test,
+            'R2_train':R2_train,
+            'R2_test':R2_test,
+            'MSE_train':MSE_train,
+            'MSE_test':MSE_test,
+            'hp_dict':hp_dict,
+            'predicted_fold_score': clf.predict(X_test),
+            'actual_fold_scores':y_test}
+
+def classifier(X, y, model, nfold, stratified):
+
+    # transforms label values
+    # only for classification!!
+    #le = preprocessing.LabelEncoder()
+    #le.fit(y)
+    #y_labels = le.transform(y)
+
+    if X.shape[0] != y.shape[0]:
+        sys.exit('ERROR: X has {} rows, y has {} rows'.format(X.shape[0], y.shape[0]))
+
+    if stratified:
+        print('MSG: using stratified kfold cross-validation')
+        kf = StratifiedKFold(y_labels, n_folds=nfold)
+    else:
+        print('MSG: using kfold cross-validation')
+        kf = KFold(len(y), n_folds=nfold)
+
+    if model == 'LR_L1':
+        model_clf = Lasso()
+        hyperparams = {'alpha':[0.2, 0.1, 0.05, 0.01]}
+        scale_data = True
+        feat_imp = True
+    elif model == 'SVR':
+        model_clf = SVR()
+        hyperparams = {'kernel':['linear','rbf'], 'C':[1,10,25]}
+        scale_data = True
+        feat_imp = True
+    elif model == 'RFR':
+        model_clf = RandomForestRegressor(n_jobs=6)
+        hyperparams = {'n_estimators':[10,25,50,100,200],
+                       'min_samples_split':[2,4,6,8,10]}
+        scale_data = False
+        feat_imp = True
+    else:
+        sys.exit('ERROR: Invalid model type {}'.format(model))
+
+    if scale_data:
+        X = preprocessing.scale(X)
+
+    # values stored for each fold
+    CV_r_train, CV_r_valid = [], []
+    CV_R2_train, CV_R2_valid = [], []
+    CV_MSE_train, CV_MSE_valid = [], []
+    predicted_CV_scores, actual_CV_scores = [], []
+    hp_dict = collections.defaultdict(list)
+
+    # get training and test data for each fold
+    i = 1
+    for train_index, test_index in kf:
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+
+        print('MSG: fold {}'.format(i))
+        results = fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i)
+        i += 1
+
+        CV_r_train.append(results['r_train'])
+        CV_r_valid.append(results['r_test'])
+        CV_R2_train.append(results['R2_train'])
+        CV_R2_valid.append(results['R2_test'])
+        CV_MSE_train.append(results['MSE_train'])
+        CV_MSE_valid.append(results['MSE_test'])
+        predicted_CV_scores.append(results['predicted_fold_score'])
+        actual_CV_scores.append(results['actual_fold_scores'])
+
+        for hp in hyperparams:
+            hp_dict[hp].append(results['hp_dict'][hp])
+
+
+    # find out most frequent hyper-params during cross-val
+    hp_mode = {}
+    for hp in hyperparams:
+        hp_mode[hp] = mode(hp_dict[hp])[0][0]
+
+    print('most frequent hp: {}'.format(hp_mode))
+    print('CV r   mean={:04.2f}, median={:04.2f}, sem={:04.2f}'.format(
+              np.mean(zip(*CV_r_valid)[0]),
+              np.median(zip(*CV_r_valid)[0]),
+              stats.sem(zip(*CV_r_valid)[0])))
+    print('CV R2  mean={:04.2f}, median={:04.2f}, sem={:04.2f}'.format(
+              np.mean(CV_R2_valid),
+              np.median(CV_R2_valid),
+              stats.sem(CV_R2_valid)))
+    print('CV MSE mean={:04.2f}, median={:04.2f}, sem={:04.2f}'.format(
+              np.mean(CV_MSE_valid),
+              np.median(CV_MSE_valid),
+              stats.sem(CV_MSE_valid)))
+
+def corr_with_template(template, seed, data, output):
+    """
+    Accepts a mean template (2d), seed mask (2d), and a list of input NIFTI
+    files.
+
+    Outputs a single csv file with one row of correlations per input NIFTI.
+    """
+    # init output matrix (TRs / ROIs)
+    out_data = np.zeros((len(data), len(np.unique(seed)[1:])))
+
+    for i, subj in enumerate(data):
+        d, _, _, _ = epi.utilities.loadnii(subj)
+        means = get_mean_ts(d, seed)
+
+        if means.shape != template.shape:
+            sys.exit('ERROR: Template shape {} does not match input {} shape {}.'.format(template.shape, subj, means.shape))
+
+        # correlate template + means, save diagonal of off diagonal
+        c = np.corrcoef(template, means)
+        c = c[c.shape[0]/2:, 0:c.shape[0]/2]
+        out_data[i, :] = c.diagonal()
+
+    # write outputs
+    np.savetxt(output, out_data, delimiter=",")
+
+def calculate_features(output, template, seeds, nifti, nask, n, p):
+    # parse inputs and define variables
+    try:
+        template = np.load(template)
+        dtype = '3d'
+    except IOError:
+        try:
+            template = np.genfromtxt(template, delimiter=',')
+            dtype = '2d'
+        except:
+            sys.exit('ERROR: template {} not interpretable as either numpy matrix or .csv'.format(template))
+
+    if dtype == '3d':
+        if len(template.shape) != 3:
+            sys.exit('ERROR: template {} is not 3D'.format(template))
+        n_templates = template.shape[2]
+
+    seed, _, _, _ = epi.utilities.loadnii(seed)
+    _, _, _, dims = epi.utilities.loadnii(data[0])
+
+    if mask:
+        mask, _, _, _ = epi.utilities.loadnii(mask)
+        # attempt to mask out non-brain regions in ROIs
+        n_seeds = len(np.unique(seed))
+        seed = seed * mask
+        if len(np.unique(seed)) != n_seeds:
+            sys.exit('ERROR: At least 1 ROI completely outside mask for {}.'.format(output))
+
+    if p < 0 or  p > 0.9999:
+        sys.exit('ERROR: p={} value invalid, should be 0 < p < 1'.format(p))
+
+    if len(np.unique(seed))-1 != template.shape[0]:
+        sys.exit('ERROR: The number of seeds in the input mask does not match the number of timeseries in the supplied template.')
+
+    if dtype == '2d':
+        corr_with_template(template, seed, data, output)
+    else:
+        # run monte carlo simulation
+        for i in np.arange(n):
+            # take a random subset of the input templates
+            test = np.arange(n_templates)
+            np.random.shuffle(test)
+            test = test[:np.ceil(len(test)*p)]
+
+            # take mean of template using subset
+            subset = np.mean(template[:,:,test], axis=2)
+
+            # generate output name
+            outname = output.split('.')[0]
+            outname = outname + '_{0:04d}.csv'.format(i+1)
+
+            # generate one output
+            corr_with_template(subset, seed, data, outname)
+
+def get_mean_ts(data, seed):
+    """
+    takes one mean column of data for each unique value found in seed. returns a
+    matrix with the number of rows of each column x the number of unique values
+    in seed (excluding zero).
+
+    Each time series is finally converted to percent signal change by subtracting
+    the mean and dividing by the mean.
+    """
+    out_data = np.zeros(np.shape(data)[1])
+
+    # get mean seed stat from each, append to output
+    for s in np.unique(seed)[1:]:
+        idx = np.where(seed == s)[0]
+        seed_data = data[idx, :]
+        seed_data = np.mean(seed_data, axis=0)
+        out_data = np.vstack((out_data, seed_data))
+
+    # strip off zeros
+    out_data = out_data[1:,:]
+
+    # convert to percent signal change
+    means = np.tile(np.mean(out_data, axis=1), [out_data.shape[1], 1]).transpose()
+    out_data = (out_data-means)/means * 100
+
+    return out_data
+
+def make_template(output, seed, data, mask, var, csv):
+
+    if len(data) < 2:
+        sys.exit('ERROR: Need at least two inputs to average')
+
+    seed, _, _, _ = epi.utilities.loadnii(seed)
+    _, _, _, dims = epi.utilities.loadnii(data[0])
+
+    if mask:
+        mask, _, _, _ = epi.utilities.loadnii(mask)
+        # attempt to mask out non-brain regions in ROIs
+        n_seeds = len(np.unique(seed))
+        seed = seed * mask
+        if len(np.unique(seed)) != n_seeds:
+            sys.exit('ERROR: At least 1 ROI completely outside mask for {}.'.format(output))
+
+    # init output matrix (TRs / ROIs)
+    if csv:
+        outDat = np.zeros((len(np.unique(seed)[1:]), dims[3]))
+    else:
+        outDat = np.zeros((len(np.unique(seed)[1:]), dims[3], len(data)))
+    if var:
+        outVar = np.zeros((len(np.unique(seed)[1:]), dims[3], len(data)))
+
+    for i, subj in enumerate(data):
+        subj, _, _, _ = epi.utilities.loadnii(subj)
+        means = get_mean_ts(subj, seed)
+        if csv:
+            outDat = outDat + means
+        else:
+            outDat[:,:,i] = means
+
+        if var:
+            outVar[:,:,i] = means
+
+    # write outputs
+    if csv:
+        outDat = outDat / len(subj)
+        np.savetxt(output, outDat, delimiter=",")
+    else:
+        np.save(output, outDat)
+
+    if var:
+        outVar = np.var(outVar, axis=2)
+        np.savetxt(var, outVar, delimiter=",")
+
+def is_probability(x):
+    """True if x is a float between 0 and 1, otherwise false."""
+    if x > 0 and x < 1:
+        return True
+    return False
+
+def is_column(df, column):
+    """
+    True if column is in pandas dataframe df. If column is a list, checks all of
+    them.
+    """
+    # if a single column
+    if type(column) == str:
+        if column in df.columns:
+            return True
+        return False
+
+    # if a list of columns
+    elif type(column) == list:
+        for c in column:
+            if c in df.columns:
+                continue
+            else:
+                return False
+        return True
+
+def main():
+    arguments = docopt(__doc__)
+    database     = arguments['<database>']
+    timeseries   = arguments['--timeseries']
+    statmaps     = arguments['--statmaps']
+    predict      = arguments['--predict']
+    roi_mask     = arguments['--roi_mask']
+    pct_template = float(arguments['--pct_template'])
+    n            = int(arguments['--n'])
+    p            = float(arguments['--p'])
+    k            = int(arguments['--k'])
+    debug        = arguments['--debug']
+
+    logger.info('Starting.')
+    if debug:
+        logger.setLevel(logging.DEBUG)
+
+    # check inputs
+    try:
+        database = pd.read_csv(database)
+    except:
+        logger.error('failed to parse input database {} (must be .csv format)',format(database))
+        sys.exit(1)
+
+    if not is_probability(pct_template):
+        logger.error('proportion of population to be template invalid: {} (0 < p < 1)'.format(pct_template))
+        sys.exit(1)
+
+    if not is_probability(p):
+        logger.error('proportion of template population to use for each outer loop invalid: {} (0 < p < 1)'.format(p))
+        sys.exit(1)
+
+    if statmaps:
+        statmaps = statmaps.split(',')
+        if statmaps not is_column(database, statmaps):
+            logger.error('not all statmap columns {} defined in {}'.format(statmaps, database))
+            sys.exit(1)
+
+    if timeseries:
+        timeseries = timeseries.split(',')
+        if timeseries not is_column(database, timeseries):
+            logger.error('not all timeseries columns {} defined in {}'.format(timeseries, database))
+            sys.exit(1)
+
+    if predict not is_column(database, predict):
+        logger.error('prediction column {} not defined in {}'.format(predict, database))
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
+

@@ -88,13 +88,14 @@ xbrain -h or --help prints this message.
 import sys, os
 import pickle
 import re
+import logging
 import time
 import datetime
 import collections
 import tables as tb
 from math import isnan
 
-from . import docopt.docopt as docopt
+#from . import docopt
 
 import matplotlib.pyplot as plt
 plt.rcParams['figure.figsize'] = (15, 10)
@@ -120,10 +121,57 @@ from sklearn.metrics import mean_squared_error as mse
 logging.basicConfig(level=logging.WARN, format="[%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(os.path.basename(__file__))
 
+# helper functions
+def is_probability(x):
+    """True if x is a float between 0 and 1, otherwise false."""
+    if x > 0 and x < 1:
+        return True
+    return False
+
+def is_column(df, column):
+    """
+    True if column is in pandas dataframe df. If column is a list, checks all of
+    them.
+
+    TODO: make recursive
+    """
+    # if a single column
+    if type(column) == str:
+        if column in df.columns:
+            return True
+        return False
+
+    # if a list of columns
+    elif type(column) == list:
+        for c in column:
+            if c in df.columns:
+                continue
+            else:
+                return False
+        return True
+
+def is_even(n):
+    if n % 2 == 0:
+        return True
+    return False
+
+def read_timeseries(db, row, col):
+    """
+    Return numpy array of the timeseries defined in the ith row, named column
+    of input database db.
+    """
+    return(np.genfromtxt(db.iloc[row][col], delimiter=','))
+
 def pickleIt(my_data,save_path):
     f = open(save_path, 'wb')
     pickle.dump(my_data, f)
     f.close()
+
+ # statistics
+def pct_signal_change(ts):
+    """Converts each timeseries (column of matrix ts) to % signal change."""
+    means = np.tile(np.mean(ts, axis=0), [ts.shape[0], 1])
+    return(((ts-means)/means) * 100)
 
 def CVLoop(model_clf, hyperparams, X_train, y_train):
     """
@@ -262,207 +310,125 @@ def classifier(X, y, model, nfold, stratified):
               np.median(CV_MSE_valid),
               stats.sem(CV_MSE_valid)))
 
-def corr_with_template(template, seed, data, output):
+def calc_xbrain(template_ts, participant_pop, timeseries):
     """
-    Accepts a mean template (2d), seed mask (2d), and a list of input NIFTI
-    files.
-
-    Outputs a single csv file with one row of correlations per input NIFTI.
+    Calculates correlation of each participant in the dataframe participant_pop
+    with the appropriate slice of the input template matrix. The features are
+    concatenated for each participant and returned as the feature matrix X.
     """
-    # init output matrix (TRs / ROIs)
-    out_data = np.zeros((len(data), len(np.unique(seed)[1:])))
+    n = len(participant_pop)
+    X = np.zeros((n, template_ts.shape[1]*len(timeseries)))
+    logger.debug('xbrain feature matrix shape: {}'.format(X.shape))
 
-    for i, subj in enumerate(data):
-        d, _, _, _ = epi.utilities.loadnii(subj)
-        means = get_mean_ts(d, seed)
+    for i in range(n):
+        xcorrs = np.array([])
+        for j, column in enumerate(timeseries):
+            ts = read_timeseries(participant_pop, i, column)
+            ts = pct_signal_change(ts)
+            print(ts.shape)
+            print(template_ts.shape)
+            rs = np.diag(np.corrcoef(ts.T, y=template_ts[:, :, j].T))
+            print(len(rs))
+            xcorrs = np.concatenate((xcorrs, rs))
+        X[i, :] = xcorrs
 
-        if means.shape != template.shape:
-            sys.exit('ERROR: Template shape {} does not match input {} shape {}.'.format(template.shape, subj, means.shape))
+    return X
 
-        # correlate template + means, save diagonal of off diagonal
-        c = np.corrcoef(template, means)
-        c = c[c.shape[0]/2:, 0:c.shape[0]/2]
-        out_data[i, :] = c.diagonal()
+def split_samples(db, pct_template, predict):
+    """
+    Splits input database into a template database, which is n % of the input
+    population with values closest to the median prediction score of interest,
+    and the remainer of the sample population. Always picks an actual sample for
+    the median, therefore, if an even number of values is submitted, will take
+    the value greater than the midpoint value normally calculated for the
+    median.
+    """
+    db = db.sort(predict)
+    n_template = np.round(db.shape[0] * pct_template)
 
-    # write outputs
-    np.savetxt(output, out_data, delimiter=",")
-
-def calculate_features(output, template, seeds, nifti, nask, n, p):
-    # parse inputs and define variables
-    try:
-        template = np.load(template)
-        dtype = '3d'
-    except IOError:
-        try:
-            template = np.genfromtxt(template, delimiter=',')
-            dtype = '2d'
-        except:
-            sys.exit('ERROR: template {} not interpretable as either numpy matrix or .csv'.format(template))
-
-    if dtype == '3d':
-        if len(template.shape) != 3:
-            sys.exit('ERROR: template {} is not 3D'.format(template))
-        n_templates = template.shape[2]
-
-    seed, _, _, _ = epi.utilities.loadnii(seed)
-    _, _, _, dims = epi.utilities.loadnii(data[0])
-
-    if mask:
-        mask, _, _, _ = epi.utilities.loadnii(mask)
-        # attempt to mask out non-brain regions in ROIs
-        n_seeds = len(np.unique(seed))
-        seed = seed * mask
-        if len(np.unique(seed)) != n_seeds:
-            sys.exit('ERROR: At least 1 ROI completely outside mask for {}.'.format(output))
-
-    if p < 0 or  p > 0.9999:
-        sys.exit('ERROR: p={} value invalid, should be 0 < p < 1'.format(p))
-
-    if len(np.unique(seed))-1 != template.shape[0]:
-        sys.exit('ERROR: The number of seeds in the input mask does not match the number of timeseries in the supplied template.')
-
-    if dtype == '2d':
-        corr_with_template(template, seed, data, output)
+    # find middle number without taking midpoints (favor higher value)
+    if is_even(len(db)):
+        median = np.median(db[1:][predict])
+        median_idx = np.median(np.where(db[1:][predict] == median)[0])
     else:
-        # run monte carlo simulation
-        for i in np.arange(n):
-            # take a random subset of the input templates
-            test = np.arange(n_templates)
-            np.random.shuffle(test)
-            test = test[:np.ceil(len(test)*p)]
+        median = np.median(db[predict])
+        median_idx = np.median(np.where(db[predict] == median)[0])
 
-            # take mean of template using subset
-            subset = np.mean(template[:,:,test], axis=2)
-
-            # generate output name
-            outname = output.split('.')[0]
-            outname = outname + '_{0:04d}.csv'.format(i+1)
-
-            # generate one output
-            corr_with_template(subset, seed, data, outname)
-
-def get_mean_ts(data, seed):
-    """
-    takes one mean column of data for each unique value found in seed. returns a
-    matrix with the number of rows of each column x the number of unique values
-    in seed (excluding zero).
-
-    Each time series is finally converted to percent signal change by subtracting
-    the mean and dividing by the mean.
-    """
-    out_data = np.zeros(np.shape(data)[1])
-
-    # get mean seed stat from each, append to output
-    for s in np.unique(seed)[1:]:
-        idx = np.where(seed == s)[0]
-        seed_data = data[idx, :]
-        seed_data = np.mean(seed_data, axis=0)
-        out_data = np.vstack((out_data, seed_data))
-
-    # strip off zeros
-    out_data = out_data[1:,:]
-
-    # convert to percent signal change
-    means = np.tile(np.mean(out_data, axis=1), [out_data.shape[1], 1]).transpose()
-    out_data = (out_data-means)/means * 100
-
-    return out_data
-
-def make_template(output, seed, data, mask, var, csv):
-
-    if len(data) < 2:
-        sys.exit('ERROR: Need at least two inputs to average')
-
-    seed, _, _, _ = epi.utilities.loadnii(seed)
-    _, _, _, dims = epi.utilities.loadnii(data[0])
-
-    if mask:
-        mask, _, _, _ = epi.utilities.loadnii(mask)
-        # attempt to mask out non-brain regions in ROIs
-        n_seeds = len(np.unique(seed))
-        seed = seed * mask
-        if len(np.unique(seed)) != n_seeds:
-            sys.exit('ERROR: At least 1 ROI completely outside mask for {}.'.format(output))
-
-    # init output matrix (TRs / ROIs)
-    if csv:
-        outDat = np.zeros((len(np.unique(seed)[1:]), dims[3]))
+    # get template indicies
+    if is_even(n_template):
+        idx_lo = median_idx - n_template/2
+        idx_hi = median_idx + n_template/2
     else:
-        outDat = np.zeros((len(np.unique(seed)[1:]), dims[3], len(data)))
-    if var:
-        outVar = np.zeros((len(np.unique(seed)[1:]), dims[3], len(data)))
+        idx_lo = median_idx - np.floor(n_template/2.0)
+        idx_hi = median_idx + np.ceil(n_template/2.0)
 
-    for i, subj in enumerate(data):
-        subj, _, _, _ = epi.utilities.loadnii(subj)
-        means = get_mean_ts(subj, seed)
-        if csv:
-            outDat = outDat + means
-        else:
-            outDat[:,:,i] = means
+    # split database into template and participant samples
+    template_idx = np.arange(idx_lo, idx_hi)
+    participants_idx = np.setdiff1d(np.arange(db.shape[0]), template_idx)
+    template = db.iloc[template_idx]
+    participants = db.iloc[participants_idx]
 
-        if var:
-            outVar[:,:,i] = means
+    return template, participants
 
-    # write outputs
-    if csv:
-        outDat = outDat / len(subj)
-        np.savetxt(output, outDat, delimiter=",")
-    else:
-        np.save(output, outDat)
 
-    if var:
-        outVar = np.var(outVar, axis=2)
-        np.savetxt(var, outVar, delimiter=",")
-
-def is_probability(x):
-    """True if x is a float between 0 and 1, otherwise false."""
-    if x > 0 and x < 1:
-        return True
-    return False
-
-def is_column(df, column):
+def get_template_ts(template, timeseries):
     """
-    True if column is in pandas dataframe df. If column is a list, checks all of
-    them.
+    Accepts a template dataframe, and for each timeseries column, takes the
+    average timeseries activity. Returns a roi X timepoint X timeseries numpy
+    matrix.
     """
-    # if a single column
-    if type(column) == str:
-        if column in df.columns:
-            return True
-        return False
+    dims = read_timeseries(template, 0, timeseries[0]).shape
+    template_ts = np.zeros((dims[0], dims[1], len(timeseries)))
+    n = len(template)
 
-    # if a list of columns
-    elif type(column) == list:
-        for c in column:
-            if c in df.columns:
-                continue
-            else:
-                return False
-        return True
+    # take mean timeseries across template population for each timeseries type
+    for i, column in enumerate(timeseries):
+        for j in range(n):
+            ts = np.genfromtxt(template[column].iloc[j], delimiter=',')
+            ts = pct_signal_change(ts)
+            template_ts[:, :, i] += ts
+        template_ts[:, :, i] = template_ts[:, :, i] / float(n)
+
+    return template_ts
 
 def main():
-    arguments = docopt(__doc__)
-    database     = arguments['<database>']
-    timeseries   = arguments['--timeseries']
-    statmaps     = arguments['--statmaps']
-    predict      = arguments['--predict']
-    roi_mask     = arguments['--roi_mask']
-    pct_template = float(arguments['--pct_template'])
-    n            = int(arguments['--n'])
-    p            = float(arguments['--p'])
-    k            = int(arguments['--k'])
-    debug        = arguments['--debug']
+    #arguments = docopt(__doc__)
+    #database     = arguments['<database>']
+    #timeseries   = arguments['--timeseries']
+    #statmaps     = arguments['--statmaps']
+    #predict      = arguments['--predict']
+    #roi_mask     = arguments['--roi_mask']
+    #pct_template = float(arguments['--pct_template'])
+    #n            = int(arguments['--n'])
+    #p            = float(arguments['--p'])
+    #k            = int(arguments['--k'])
+    #debug        = arguments['--debug']
+
+    # for testing
+    database = '/projects/jviviano/data/xbrain/assets/database_xbrain.csv'
+    timeseries = 'ts_imi,ts_obs'
+    statmaps = None
+    predict = 'Part3_TotalCorrect'
+    roi_mask = None
+    pct_template = 0.1
+    n = 10
+    p = 0.5
+    k = 3
+    debug = True
 
     logger.info('Starting.')
     if debug:
         logger.setLevel(logging.DEBUG)
 
-    # check inputs
+    # check and format inputs
+    logger.debug('checking inputs')
     try:
-        database = pd.read_csv(database)
+        db = pd.read_csv(database)
     except:
         logger.error('failed to parse input database {} (must be .csv format)',format(database))
         sys.exit(1)
+
+    columns = []
 
     if not is_probability(pct_template):
         logger.error('proportion of population to be template invalid: {} (0 < p < 1)'.format(pct_template))
@@ -474,19 +440,47 @@ def main():
 
     if statmaps:
         statmaps = statmaps.split(',')
-        if statmaps not is_column(database, statmaps):
+        if not is_column(db, statmaps):
             logger.error('not all statmap columns {} defined in {}'.format(statmaps, database))
             sys.exit(1)
+        columns.extend(statmaps)
 
     if timeseries:
         timeseries = timeseries.split(',')
-        if timeseries not is_column(database, timeseries):
+        if not is_column(db, timeseries):
             logger.error('not all timeseries columns {} defined in {}'.format(timeseries, database))
             sys.exit(1)
+        columns.extend(timeseries)
 
-    if predict not is_column(database, predict):
+    if not is_column(db, predict):
         logger.error('prediction column {} not defined in {}'.format(predict, database))
         sys.exit(1)
+    columns.append(predict)
+
+    # get required columns, remove participants with missing data
+    logger.debug('reducing data to defined columns: {}'.format(columns))
+    db = db[columns]
+    logger.debug('rows in databse before removing NaNs: {}'.format(len(db)))
+    db = db.dropna(axis=0)
+    logger.debug('rows in databse after removing NaNs: {}'.format(len(db)))
+
+    # split samples into template and participant populations
+    logger.debug('splitting sample into template & participant populations')
+    template_pop, participant_pop = split_samples(db, pct_template, predict)
+    logger.debug('n template_pop: {}, n participant_pop: {}'.format(len(template_pop), len(participant_pop)))
+    n_per_template = np.round(len(template_pop)*p)
+
+    # outer loop: take a random subsample (p%) of the template population
+    for i in range(n):
+        logger.debug('OUTER LOOP: template {}'.format(i+1))
+        idx = np.sort(np.random.permutation(np.arange(len(template_pop)))[:n_per_template])
+        template = template_pop.iloc[idx]
+
+        logger.debug('generating template timeseries')
+        template_ts = get_template_ts(template, timeseries)
+
+        logger.debug('calculating population cross-brain correlations with template')
+        data = calc_xbrain(template_ts, participant_pop, timeseries)
 
 if __name__ == '__main__':
     main()

@@ -97,6 +97,8 @@ from math import isnan
 
 #from . import docopt
 
+#import matplotlib
+#matplotlib.use('Agg')   # Force matplotlib to not use any Xwindows backend
 import matplotlib.pyplot as plt
 plt.rcParams['figure.figsize'] = (15, 10)
 plt.style.use('ggplot')
@@ -132,25 +134,20 @@ def is_column(df, column):
     """
     True if column is in pandas dataframe df. If column is a list, checks all of
     them.
-
-    TODO: make recursive
     """
-    # if a single column
     if type(column) == str:
         if column in df.columns:
             return True
         return False
 
-    # if a list of columns
     elif type(column) == list:
         for c in column:
-            if c in df.columns:
-                continue
-            else:
+            if not is_column(df, c):
                 return False
         return True
 
 def is_even(n):
+    """True if n is even, else false."""
     if n % 2 == 0:
         return True
     return False
@@ -160,39 +157,52 @@ def read_timeseries(db, row, col):
     Return numpy array of the timeseries defined in the ith row, named column
     of input database db.
     """
-    return(np.genfromtxt(db.iloc[row][col], delimiter=','))
+    timeseries_file = db.iloc[row][col]
+    try:
+        return(np.genfromtxt(timeseries_file, delimiter=','))
+    except:
+        raise IOError('failed to parse timeseries {}'.format(timeseries_file))
+
+def gather_dv(participant_pop, predict):
+    """Returns a numpy vector of the predicted column."""
+    return(np.array(participant_pop[predict]))
 
 def pickleIt(my_data,save_path):
     f = open(save_path, 'wb')
     pickle.dump(my_data, f)
     f.close()
 
- # statistics
+# statistics
 def pct_signal_change(ts):
     """Converts each timeseries (column of matrix ts) to % signal change."""
     means = np.tile(np.mean(ts, axis=0), [ts.shape[0], 1])
     return(((ts-means)/means) * 100)
 
-def CVLoop(model_clf, hyperparams, X_train, y_train):
+def cv_loop(model_clf, hyperparams, X_train, y_train):
     """
     Uses cross validation to do a grid search on the hyperparameter dictionary
     input.
     """
-    clf = grid_search.GridSearchCV(model_clf, hyperparams, cv=3,verbose=0)
+    clf = grid_search.GridSearchCV(model_clf, hyperparams, cv=3, verbose=0)
     clf.fit(X_train, y_train)
 
     return clf
 
-def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i):
+def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop):
+    """
+    Computes a single fold
+    """
+    # store best hyper-parameter for each fold
+    hp_dict = collections.defaultdict(list)
 
-    hp_dict = collections.defaultdict(list) #store best hyper-parameters for each fold
+    # INNERMOST LOOP: CV of hyperparameters for this fold. Returns best clf.
+    clf = cv_loop(model_clf, hyperparams, X_train, y_train)
 
-    clf = CVLoop(model_clf, hyperparams, X_train, y_train)
     for hp in hyperparams:
         hp_dict[hp].append(clf.best_estimator_.get_params()[hp])
 
-    r_train = stats.pearsonr(clf.predict(X_train), y_train)
-    r_test = stats.pearsonr(clf.predict(X_test), y_test)
+    r_train = stats.pearsonr(clf.predict(X_train), y_train)[0] # remove p vals
+    r_test = stats.pearsonr(clf.predict(X_test), y_test)[0]    #
     R2_train = clf.score(X_train, y_train)
     R2_test = clf.score(X_test, y_test)
     MSE_train = mse(clf.predict(X_train), y_train)
@@ -200,7 +210,7 @@ def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i):
 
     # visualization
     plt.scatter(clf.predict(X_test),  y_test)
-    plt.savefig('test_predicit_{}.jpg'.format(i))
+    plt.savefig('test_predicit_oloop-{}_fold-{}.jpg'.format(oloop, i))
     plt.close()
 
     # check feature importance (QC for HC importance)
@@ -211,18 +221,21 @@ def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i):
     #     print 'fid: {} r: {}'.format(fid, zip(*CV_r_valid)[0][fid])
     #     print feat_imp[70:], np.argsort(feat_imp)[70:]
 
-    return {'r_train':r_train,
-            'r_test':r_test,
-            'R2_train':R2_train,
-            'R2_test':R2_test,
-            'MSE_train':MSE_train,
-            'MSE_test':MSE_test,
-            'hp_dict':hp_dict,
-            'predicted_fold_score': clf.predict(X_test),
-            'actual_fold_scores':y_test}
+    return {'r_train':   r_train,
+            'r_test':    r_test,
+            'R2_train':  R2_train,
+            'R2_test':   R2_test,
+            'MSE_train': MSE_train,
+            'MSE_test':  MSE_test,
+            'hp_dict':   hp_dict,
+            'pred_scores': clf.predict(X_test),
+            'real_scores': y_test}
 
-def classifier(X, y, model, nfold, stratified):
-
+def classifier(X, y, kfold, oloop=1, model='RFR', stratified=False):
+    """
+    Builds and trains a classifier to predict y from the feature matrix X using
+    kfold cross-validation and
+    """
     # transforms label values
     # only for classification!!
     #le = preprocessing.LabelEncoder()
@@ -230,14 +243,14 @@ def classifier(X, y, model, nfold, stratified):
     #y_labels = le.transform(y)
 
     if X.shape[0] != y.shape[0]:
-        sys.exit('ERROR: X has {} rows, y has {} rows'.format(X.shape[0], y.shape[0]))
+        raise Exception('X has {} rows, y has {} rows'.format(X.shape[0], y.shape[0]))
 
     if stratified:
-        print('MSG: using stratified kfold cross-validation')
-        kf = StratifiedKFold(y_labels, n_folds=nfold)
+        logger.debug('stratified kfold cross-validation')
+        kf = StratifiedKFold(y_labels, n_folds=kfold)
     else:
-        print('MSG: using kfold cross-validation')
-        kf = KFold(len(y), n_folds=nfold)
+        logger.debug('kfold cross-validation')
+        kf = KFold(len(y), n_folds=kfold)
 
     if model == 'LR_L1':
         model_clf = Lasso()
@@ -251,21 +264,16 @@ def classifier(X, y, model, nfold, stratified):
         feat_imp = True
     elif model == 'RFR':
         model_clf = RandomForestRegressor(n_jobs=6)
-        hyperparams = {'n_estimators':[10,25,50,100,200],
-                       'min_samples_split':[2,4,6,8,10]}
+        hyperparams = {'n_estimators':[10,25,50,100,200], 'min_samples_split':[2,4,6,8,10]}
         scale_data = False
         feat_imp = True
     else:
-        sys.exit('ERROR: Invalid model type {}'.format(model))
+        logger.error('invalid model type {}'.format(model))
 
     if scale_data:
         X = preprocessing.scale(X)
 
-    # values stored for each fold
-    CV_r_train, CV_r_valid = [], []
-    CV_R2_train, CV_R2_valid = [], []
-    CV_MSE_train, CV_MSE_valid = [], []
-    predicted_CV_scores, actual_CV_scores = [], []
+    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
     hp_dict = collections.defaultdict(list)
 
     # get training and test data for each fold
@@ -274,41 +282,38 @@ def classifier(X, y, model, nfold, stratified):
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
 
-        print('MSG: fold {}'.format(i))
-        results = fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i)
+        results = fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop)
         i += 1
 
-        CV_r_train.append(results['r_train'])
-        CV_r_valid.append(results['r_test'])
-        CV_R2_train.append(results['R2_train'])
-        CV_R2_valid.append(results['R2_test'])
-        CV_MSE_train.append(results['MSE_train'])
-        CV_MSE_valid.append(results['MSE_test'])
-        predicted_CV_scores.append(results['predicted_fold_score'])
-        actual_CV_scores.append(results['actual_fold_scores'])
+        logger.debug('fold {}/{}: R2 train={:04.2f}, test={:04.2f}'.format(
+            i, kfold, results['R2_train'], results['R2_test']))
+        r_train.append(results['r_train'])
+        r_test.append(results['r_test'])
+        R2_train.append(results['R2_train'])
+        R2_test.append(results['R2_test'])
+        MSE_train.append(results['MSE_train'])
+        MSE_test.append(results['MSE_test'])
+        pred_scores.append(results['pred_scores'])
+        real_scores.append(results['real_scores'])
 
         for hp in hyperparams:
             hp_dict[hp].append(results['hp_dict'][hp])
-
 
     # find out most frequent hyper-params during cross-val
     hp_mode = {}
     for hp in hyperparams:
         hp_mode[hp] = mode(hp_dict[hp])[0][0]
 
-    print('most frequent hp: {}'.format(hp_mode))
-    print('CV r   mean={:04.2f}, median={:04.2f}, sem={:04.2f}'.format(
-              np.mean(zip(*CV_r_valid)[0]),
-              np.median(zip(*CV_r_valid)[0]),
-              stats.sem(zip(*CV_r_valid)[0])))
-    print('CV R2  mean={:04.2f}, median={:04.2f}, sem={:04.2f}'.format(
-              np.mean(CV_R2_valid),
-              np.median(CV_R2_valid),
-              stats.sem(CV_R2_valid)))
-    print('CV MSE mean={:04.2f}, median={:04.2f}, sem={:04.2f}'.format(
-              np.mean(CV_MSE_valid),
-              np.median(CV_MSE_valid),
-              stats.sem(CV_MSE_valid)))
+    logger.debug('most frequent hp: {}'.format(hp_mode))
+    logger.debug('Outer Loop {} CV={}:\n    r mean={:04.2f}+/-{:04.2f}\n    R2 mean={:04.2f}+/-{:04.2f}\n    MSE mean={:04.2f}+/-{:04.2f}'.format(
+        oloop, kfold, rmean, rsem, r2mean, r2sem, msemean, msesem))
+
+    return {'r_train':   r_train,
+            'r_test':    r_test,
+            'R2_train':  R2_train,
+            'R2_test':   R2_test,
+            'MSE_train': MSE_train,
+            'MSE_test':  MSE_test}
 
 def calc_xbrain(template_ts, participant_pop, timeseries):
     """
@@ -323,13 +328,20 @@ def calc_xbrain(template_ts, participant_pop, timeseries):
     for i in range(n):
         xcorrs = np.array([])
         for j, column in enumerate(timeseries):
-            ts = read_timeseries(participant_pop, i, column)
+
+            try:
+                ts = read_timeseries(participant_pop, i, column)
+            except IOError as e:
+                logger.error(e)
+                sys.exit(1)
+
             ts = pct_signal_change(ts)
-            print(ts.shape)
-            print(template_ts.shape)
-            rs = np.diag(np.corrcoef(ts.T, y=template_ts[:, :, j].T))
-            print(len(rs))
-            xcorrs = np.concatenate((xcorrs, rs))
+            # diag of the cross-variable corrs (upper right corner of matrix)
+            try:
+                rs = np.diag(np.corrcoef(ts.T, y=template_ts[:, :, j].T)[ts.shape[1]:, :ts.shape[1]])
+                xcorrs = np.concatenate((xcorrs, rs))
+            except:
+                raise Exception('xcorr failed due to missmatched dimensions: subject {} dims={}, template {} dims={}'.format(i, ts.shape, j, template_ts[:,:,j].shape))
         X[i, :] = xcorrs
 
     return X
@@ -354,6 +366,8 @@ def split_samples(db, pct_template, predict):
         median = np.median(db[predict])
         median_idx = np.median(np.where(db[predict] == median)[0])
 
+    logger.debug('median score: {}'.format(median))
+
     # get template indicies
     if is_even(n_template):
         idx_lo = median_idx - n_template/2
@@ -369,7 +383,6 @@ def split_samples(db, pct_template, predict):
     participants = db.iloc[participants_idx]
 
     return template, participants
-
 
 def get_template_ts(template, timeseries):
     """
@@ -406,14 +419,14 @@ def main():
 
     # for testing
     database = '/projects/jviviano/data/xbrain/assets/database_xbrain.csv'
-    timeseries = 'ts_imi,ts_obs'
+    timeseries = 'ts_imi'
     statmaps = None
     predict = 'Part3_TotalCorrect'
     roi_mask = None
-    pct_template = 0.1
+    pct_template = 0.25
     n = 10
     p = 0.5
-    k = 3
+    k = 5
     debug = True
 
     logger.info('Starting.')
@@ -457,18 +470,24 @@ def main():
         sys.exit(1)
     columns.append(predict)
 
-    # get required columns, remove participants with missing data
     logger.debug('reducing data to defined columns: {}'.format(columns))
     db = db[columns]
-    logger.debug('rows in databse before removing NaNs: {}'.format(len(db)))
+    logger.debug('rows in database before removing NaNs: {}'.format(len(db)))
     db = db.dropna(axis=0)
-    logger.debug('rows in databse after removing NaNs: {}'.format(len(db)))
+    logger.debug('rows in database after removing NaNs: {}'.format(len(db)))
 
-    # split samples into template and participant populations
     logger.debug('splitting sample into template & participant populations')
     template_pop, participant_pop = split_samples(db, pct_template, predict)
+
     logger.debug('n template_pop: {}, n participant_pop: {}'.format(len(template_pop), len(participant_pop)))
     n_per_template = np.round(len(template_pop)*p)
+
+    logger.debug('generating dependent variable vector y')
+    y = gather_dv(participant_pop, predict)
+    plt.hist(y)
+    plt.show()
+
+    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
 
     # outer loop: take a random subsample (p%) of the template population
     for i in range(n):
@@ -480,7 +499,38 @@ def main():
         template_ts = get_template_ts(template, timeseries)
 
         logger.debug('calculating population cross-brain correlations with template')
-        data = calc_xbrain(template_ts, participant_pop, timeseries)
+        try:
+            X = calc_xbrain(template_ts, participant_pop, timeseries)
+            plt.imshow(X, vmin=-0.5, vmax=0.5, cmap=plt.cm.RdBu_r)
+            plt.colorbar()
+            plt.show()
+        except Exception as e:
+            logger.error(e)
+            sys.exit(1)
+
+        logger.debug('INNER LOOP: template {}'.format(i+1))
+        try:
+            results = classifier(X, y, k, i+1)
+        except Exception as e:
+            logger.error(e)
+            sys.exit(1)
+
+        # append inner loop fold results for each iter of outer loop
+        r_train.append(results['r_train'])
+        r_test.append(results['r_test'])
+        R2_train.append(results['R2_train'])
+        R2_test.append(results['R2_test'])
+        MSE_train.append(results['MSE_train'])
+        MSE_test.append(results['MSE_test'])
+
+    rmean = np.mean(r_test)
+    rsem = stats.sem(r_test)
+    r2mean = np.mean(R2_test)
+    r2sem = stats.sem(R2_test)
+    msemean = np.mean(MSE_test)
+    msesem = stats.sem(MSE_test)
+
+    print('Results:\n  rmean={}\n rsem={}\n  r2mean={}\n  r2sem={}\n  MSEmean={}\n  MSEsem={}\n'.format(rmean, rsem, r2mean, r2sem, msemean, msesem))
 
 if __name__ == '__main__':
     main()

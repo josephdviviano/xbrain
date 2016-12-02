@@ -18,7 +18,9 @@ Options:
     --n             Number of monte-carlo simulations to run for the outer loop [default: 10]
     --p             Proportion (0 < p < 1) of template subjects taken for each outer loop simulation [default: 0.5]
     --k             Number of folds done for the inner loop cross-validation [default: 5]
+    --two-template  Use a two template model, one template for subjects with high y scores, and one with low y scores.
     --debug         Verbose outputs.
+    --plot          Print out diagnostic plots in .svg format to the current directory.
 
 DETAILS
 
@@ -106,6 +108,8 @@ plt.style.use('ggplot')
 import numpy as np
 from scipy import stats
 from scipy.stats import mode
+import scipy.cluster.hierarchy as sch
+
 import pandas as pd
 import h5py as h5
 import nibabel as nib
@@ -122,6 +126,8 @@ from sklearn.metrics import mean_squared_error as mse
 
 logging.basicConfig(level=logging.WARN, format="[%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(os.path.basename(__file__))
+
+HOME = os.path.expanduser('~')
 
 # helper functions
 def is_probability(x):
@@ -209,8 +215,8 @@ def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop):
     MSE_test = mse(clf.predict(X_test), y_test)
 
     # visualization
-    plt.scatter(clf.predict(X_test),  y_test)
-    plt.savefig('test_predicit_oloop-{}_fold-{}.jpg'.format(oloop, i))
+    plt.scatter(clf.predict(X_test), y_test)
+    plt.savefig(os.path.join(HOME, 'test_predicit_oloop-{}_fold-{}.pdf'.format(oloop, i)))
     plt.close()
 
     # check feature importance (QC for HC importance)
@@ -283,10 +289,10 @@ def classifier(X, y, kfold, oloop=1, model='RFR', stratified=False):
         y_train, y_test = y[train_index], y[test_index]
 
         results = fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop)
-        i += 1
-
         logger.debug('fold {}/{}: R2 train={:04.2f}, test={:04.2f}'.format(
             i, kfold, results['R2_train'], results['R2_test']))
+        i += 1
+
         r_train.append(results['r_train'])
         r_test.append(results['r_test'])
         R2_train.append(results['R2_train'])
@@ -306,7 +312,9 @@ def classifier(X, y, kfold, oloop=1, model='RFR', stratified=False):
 
     logger.debug('most frequent hp: {}'.format(hp_mode))
     logger.debug('Outer Loop {} CV={}:\n    r mean={:04.2f}+/-{:04.2f}\n    R2 mean={:04.2f}+/-{:04.2f}\n    MSE mean={:04.2f}+/-{:04.2f}'.format(
-        oloop, kfold, rmean, rsem, r2mean, r2sem, msemean, msesem))
+        oloop, kfold, np.mean(r_test), stats.sem(r_test),
+                      np.mean(R2_test), stats.sem(R2_test),
+                      np.mean(MSE_test), stats.sem(MSE_test)))
 
     return {'r_train':   r_train,
             'r_test':    r_test,
@@ -315,7 +323,36 @@ def classifier(X, y, kfold, oloop=1, model='RFR', stratified=False):
             'MSE_train': MSE_train,
             'MSE_test':  MSE_test}
 
-def calc_xbrain(template_ts, participant_pop, timeseries):
+def cluster(X):
+    """
+    Hierarchical clustering of the rows in X (subjects). Uses Ward's algorithm.
+    """
+    fig = plt.figure()
+    axd = fig.add_axes([0.09,0.1,0.2,0.8])
+    axd.set_xticks([])
+    axd.set_yticks([])
+
+    X = np.corrcoef(X)
+
+    link = sch.linkage(X, method='ward')
+    clst = sch.fcluster(link, 2, criterion='maxclust')
+    dend = sch.dendrogram(link, orientation='right')
+    idx = dend['leaves']
+    X = X[idx, :]
+    X = X[:, idx]
+
+    axm = fig.add_axes([0.3,0.1,0.6,0.8])
+    im = axm.matshow(X, aspect='auto', origin='lower', cmap=plt.cm.Reds, vmin=0, vmax=0.5)
+    axm.set_xticks([])
+    axm.set_yticks([])
+    axc = fig.add_axes([0.91,0.1,0.02,0.8])
+    plt.colorbar(im, cax=axc)
+    plt.show()
+    plt.savefig(os.path.join(HOME, 'corr.pdf'))
+
+    return clst
+
+def calc_xbrain(template_ts, participant_pop, timeseries, plot=False):
     """
     Calculates correlation of each participant in the dataframe participant_pop
     with the appropriate slice of the input template matrix. The features are
@@ -344,41 +381,40 @@ def calc_xbrain(template_ts, participant_pop, timeseries):
                 raise Exception('xcorr failed due to missmatched dimensions: subject {} dims={}, template {} dims={}'.format(i, ts.shape, j, template_ts[:,:,j].shape))
         X[i, :] = xcorrs
 
+    # remove values less than zero (not meaningful)
+    X[X < 0] = 0
+
     return X
 
-def split_samples(db, pct_template, predict):
+def split_samples(db, n_template, predict, percentile=50):
     """
-    Splits input database into a template database, which is n % of the input
-    population with values closest to the median prediction score of interest,
-    and the remainer of the sample population. Always picks an actual sample for
-    the median, therefore, if an even number of values is submitted, will take
-    the value greater than the midpoint value normally calculated for the
-    median.
+    Splits input database into a template database, which is n subjects of the
+    input population with values closest to the target percentile prediction
+    score of interest (default is the median, or 50%), and the remainer of the
+    sample population. Always picks an actual sample for the target percentile,
+    therefore, if an even number of values is submitted, will take the value
+    greater than the midpoint value normally calculated for the median.
     """
     db = db.sort(predict)
-    n_template = np.round(db.shape[0] * pct_template)
 
-    # find middle number without taking midpoints (favor higher value)
-    if is_even(len(db)):
-        median = np.median(db[1:][predict])
-        median_idx = np.median(np.where(db[1:][predict] == median)[0])
-    else:
-        median = np.median(db[predict])
-        median_idx = np.median(np.where(db[predict] == median)[0])
-
-    logger.debug('median score: {}'.format(median))
+    # find the target value without taking midpoints (favor higher value)
+    target = np.percentile(db[predict], percentile, interpolation='higher')
+    target_idx = np.percentile(np.where(db[predict] == target)[0], 50, interpolation='lower')
+    logger.debug('target percentile={}, score={}'.format(percentile, target))
 
     # get template indicies
     if is_even(n_template):
-        idx_lo = median_idx - n_template/2
-        idx_hi = median_idx + n_template/2
+        idx_lo = target_idx - n_template/2
+        idx_hi = target_idx + n_template/2
     else:
-        idx_lo = median_idx - np.floor(n_template/2.0)
-        idx_hi = median_idx + np.ceil(n_template/2.0)
+        idx_lo = target_idx - np.floor(n_template/2.0)
+        idx_hi = target_idx + np.ceil(n_template/2.0)
 
     # split database into template and participant samples
-    template_idx = np.arange(idx_lo, idx_hi)
+    template_idx = np.arange(idx_lo, idx_hi+1)
     participants_idx = np.setdiff1d(np.arange(db.shape[0]), template_idx)
+    logger.debug('template subjects: {} - {}'.format(idx_lo, idx_hi))
+    logger.debug('participants: {}'.format(participants_idx))
     template = db.iloc[template_idx]
     participants = db.iloc[participants_idx]
 
@@ -415,25 +451,29 @@ def main():
     #n            = int(arguments['--n'])
     #p            = float(arguments['--p'])
     #k            = int(arguments['--k'])
+    #two_template = arguments['--two-template']
     #debug        = arguments['--debug']
+    #plot         = arguments['--plot']
 
     # for testing
     database = '/projects/jviviano/data/xbrain/assets/database_xbrain.csv'
     timeseries = 'ts_imi'
     statmaps = None
-    predict = 'Part3_TotalCorrect'
+    predict = 'Part2_TotalCorrect'
     roi_mask = None
-    pct_template = 0.25
-    n = 10
+    pct_template = 0.30
+    n = 5
     p = 0.5
-    k = 5
+    k = 3
+    two_template = True
     debug = True
+    plot = True
 
-    logger.info('Starting.')
+    logger.info('starting')
     if debug:
         logger.setLevel(logging.DEBUG)
 
-    # check and format inputs
+    # logging
     logger.debug('checking inputs')
     try:
         db = pd.read_csv(database)
@@ -441,8 +481,8 @@ def main():
         logger.error('failed to parse input database {} (must be .csv format)',format(database))
         sys.exit(1)
 
+    # check and format inputs
     columns = []
-
     if not is_probability(pct_template):
         logger.error('proportion of population to be template invalid: {} (0 < p < 1)'.format(pct_template))
         sys.exit(1)
@@ -470,22 +510,42 @@ def main():
         sys.exit(1)
     columns.append(predict)
 
-    logger.debug('reducing data to defined columns: {}'.format(columns))
+    # reducing data to defined columns
+    logger.debug('all columns in submitted database:\n{}'.format(db.columns))
     db = db[columns]
-    logger.debug('rows in database before removing NaNs: {}'.format(len(db)))
+    n_pre = len(db)
     db = db.dropna(axis=0)
-    logger.debug('rows in database after removing NaNs: {}'.format(len(db)))
+    logger.debug('reduced columns: {}\nclean rows in database (no NaNs): {}/{}'.format(columns, len(db), n_pre))
 
-    logger.debug('splitting sample into template & participant populations')
-    template_pop, participant_pop = split_samples(db, pct_template, predict)
+    #logger.debug('analyzing full sample')
+    #template_ts = get_template_ts(db, timeseries)
+    #X = calc_xbrain(template_ts, db, timeseries, plot=False)
+    #y = gather_dv(db, predict)
+    #clst = cluster(X)
+    #plt.subplot(121)
+    #plt.hist(y[clst == 1])
+    #plt.subplot(122)
+    #plt.hist(y[clst == 2])
+    #plt.show()
+    #sys.exit()
+
+    n_template = np.round(db.shape[0] * pct_template)
+    if two_template:
+        logger.debug('two template analysis: splitting sample into template & participant populations')
+        logger.debug('finding high template: 80th percentile')
+        template_pop, participant_pop = split_samples(db, np.ceil(n_template/2), predict, percentile=80)
+        logger.debug('finding low template: 20th percentile')
+        template_pop_low, participant_pop = split_samples(participant_pop, np.ceil(n_template/2), predict, percentile=20)
+    else:
+        logger.debug('one template analysis: splitting sample into template & participant populations')
+        logger.debug('finding template: 50th percentile')
+        template_pop, participant_pop = split_samples(db, n_template, predict)
 
     logger.debug('n template_pop: {}, n participant_pop: {}'.format(len(template_pop), len(participant_pop)))
     n_per_template = np.round(len(template_pop)*p)
 
     logger.debug('generating dependent variable vector y')
     y = gather_dv(participant_pop, predict)
-    plt.hist(y)
-    plt.show()
 
     r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
 
@@ -494,19 +554,47 @@ def main():
         logger.debug('OUTER LOOP: template {}'.format(i+1))
         idx = np.sort(np.random.permutation(np.arange(len(template_pop)))[:n_per_template])
         template = template_pop.iloc[idx]
+        if two_template:
+            template_low = template_pop_low.iloc[idx]
 
         logger.debug('generating template timeseries')
         template_ts = get_template_ts(template, timeseries)
+        if two_template:
+            template_ts_low = get_template_ts(template_low, timeseries)
 
         logger.debug('calculating population cross-brain correlations with template')
         try:
-            X = calc_xbrain(template_ts, participant_pop, timeseries)
-            plt.imshow(X, vmin=-0.5, vmax=0.5, cmap=plt.cm.RdBu_r)
-            plt.colorbar()
-            plt.show()
+            X = calc_xbrain(template_ts, participant_pop, timeseries, plot=plot)
+            if two_template:
+                X_low = calc_xbrain(template_ts_low, participant_pop, timeseries, plot=plot)
         except Exception as e:
             logger.error(e)
             sys.exit(1)
+
+        if two_template:
+            logger.debug('two template analysis: taking ratio of features from high and low templates')
+            if plot:
+                plt.subplot(131)
+                plt.imshow(X, vmin=0, vmax=0.5, cmap=plt.cm.Reds)
+                plt.title('X high')
+                plt.subplot(132)
+                plt.imshow(X_low, vmin=0, vmax=0.5, cmap=plt.cm.Reds)
+                plt.title('X low')
+                plt.subplot(133)
+                plt.imshow(X - X_low, vmin=0, vmax=0.5, cmap=plt.cm.Reds)
+                plt.title('X ratio')
+                plt.savefig(os.path.join(HOME, 'X_iter={}.pdf'.format(i+1)))
+                plt.close()
+
+            X = X - X_low # take difference of high and low score templates
+            X[np.isnan(X)] = 0 # remove nonsense values
+            X[np.isinf(X)] = 0 # remove nonsense values
+        else:
+            if plot:
+                plt.imshow(X, vmin=-0, vmax=0.5, cmap=plt.cm.Reds)
+                plt.colorbar()
+                plt.savefig(os.path.join(HOME, 'X_iter={}.pdf'.format(i+1)))
+                plt.close()
 
         logger.debug('INNER LOOP: template {}'.format(i+1))
         try:

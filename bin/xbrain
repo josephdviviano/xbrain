@@ -88,357 +88,21 @@ generalizability.
 xbrain -h or --help prints this message.
 """
 import sys, os
-import pickle
-import re
 import logging
-import time
-import datetime
-import collections
-import tables as tb
-from math import isnan
-
-#from . import docopt
-
-#import matplotlib
-#matplotlib.use('Agg')   # Force matplotlib to not use any Xwindows backend
-import matplotlib.pyplot as plt
-plt.rcParams['figure.figsize'] = (15, 10)
-plt.style.use('ggplot')
 
 import numpy as np
-from scipy import stats
-from scipy.stats import mode
-import scipy.cluster.hierarchy as sch
-
+import scipy as sp
 import pandas as pd
-import h5py as h5
-import nibabel as nib
 
-from sklearn import preprocessing
-from sklearn import grid_search
-from sklearn.cross_validation import KFold
-from sklearn.cross_validation import StratifiedKFold
-from sklearn.linear_model import LinearRegression
-from sklearn.linear_model import Lasso
-from sklearn.svm import SVR
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error as mse
+import xbrain.docopt as docopt
+import xbrain.utils as utils
+import xbrain.correlate as corr
+import xbrain.stats as stats
 
 logging.basicConfig(level=logging.WARN, format="[%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(os.path.basename(__file__))
 
 HOME = os.path.expanduser('~')
-
-# helper functions
-def is_probability(x):
-    """True if x is a float between 0 and 1, otherwise false."""
-    if x > 0 and x < 1:
-        return True
-    return False
-
-def is_column(df, column):
-    """
-    True if column is in pandas dataframe df. If column is a list, checks all of
-    them.
-    """
-    if type(column) == str:
-        if column in df.columns:
-            return True
-        return False
-
-    elif type(column) == list:
-        for c in column:
-            if not is_column(df, c):
-                return False
-        return True
-
-def is_even(n):
-    """True if n is even, else false."""
-    if n % 2 == 0:
-        return True
-    return False
-
-def read_timeseries(db, row, col):
-    """
-    Return numpy array of the timeseries defined in the ith row, named column
-    of input database db.
-    """
-    timeseries_file = db.iloc[row][col]
-    try:
-        return(np.genfromtxt(timeseries_file, delimiter=','))
-    except:
-        raise IOError('failed to parse timeseries {}'.format(timeseries_file))
-
-def gather_dv(participant_pop, predict):
-    """Returns a numpy vector of the predicted column."""
-    return(np.array(participant_pop[predict]))
-
-def pickleIt(my_data,save_path):
-    f = open(save_path, 'wb')
-    pickle.dump(my_data, f)
-    f.close()
-
-# statistics
-def pct_signal_change(ts):
-    """Converts each timeseries (column of matrix ts) to % signal change."""
-    means = np.tile(np.mean(ts, axis=0), [ts.shape[0], 1])
-    return(((ts-means)/means) * 100)
-
-def cv_loop(model_clf, hyperparams, X_train, y_train):
-    """
-    Uses cross validation to do a grid search on the hyperparameter dictionary
-    input.
-    """
-    clf = grid_search.GridSearchCV(model_clf, hyperparams, cv=3, verbose=0)
-    clf.fit(X_train, y_train)
-
-    return clf
-
-def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop):
-    """
-    Computes a single fold
-    """
-    # store best hyper-parameter for each fold
-    hp_dict = collections.defaultdict(list)
-
-    # INNERMOST LOOP: CV of hyperparameters for this fold. Returns best clf.
-    clf = cv_loop(model_clf, hyperparams, X_train, y_train)
-
-    for hp in hyperparams:
-        hp_dict[hp].append(clf.best_estimator_.get_params()[hp])
-
-    r_train = stats.pearsonr(clf.predict(X_train), y_train)[0] # remove p vals
-    r_test = stats.pearsonr(clf.predict(X_test), y_test)[0]    #
-    R2_train = clf.score(X_train, y_train)
-    R2_test = clf.score(X_test, y_test)
-    MSE_train = mse(clf.predict(X_train), y_train)
-    MSE_test = mse(clf.predict(X_test), y_test)
-
-    # visualization
-    plt.scatter(clf.predict(X_test), y_test)
-    plt.savefig(os.path.join(HOME, 'test_predicit_oloop-{}_fold-{}.pdf'.format(oloop, i)))
-    plt.close()
-
-    # check feature importance (QC for HC importance)
-    # for fid in np.arange(10):
-    #     model_clf.fit(X_train[fid],y_train[fid])
-    #     feat_imp = model_clf.feature_importances_
-    #     print
-    #     print 'fid: {} r: {}'.format(fid, zip(*CV_r_valid)[0][fid])
-    #     print feat_imp[70:], np.argsort(feat_imp)[70:]
-
-    return {'r_train':   r_train,
-            'r_test':    r_test,
-            'R2_train':  R2_train,
-            'R2_test':   R2_test,
-            'MSE_train': MSE_train,
-            'MSE_test':  MSE_test,
-            'hp_dict':   hp_dict,
-            'pred_scores': clf.predict(X_test),
-            'real_scores': y_test}
-
-def classifier(X, y, kfold, oloop=1, model='RFR', stratified=False):
-    """
-    Builds and trains a classifier to predict y from the feature matrix X using
-    kfold cross-validation and
-    """
-    # transforms label values
-    # only for classification!!
-    #le = preprocessing.LabelEncoder()
-    #le.fit(y)
-    #y_labels = le.transform(y)
-
-    if X.shape[0] != y.shape[0]:
-        raise Exception('X has {} rows, y has {} rows'.format(X.shape[0], y.shape[0]))
-
-    if stratified:
-        logger.debug('stratified kfold cross-validation')
-        kf = StratifiedKFold(y_labels, n_folds=kfold)
-    else:
-        logger.debug('kfold cross-validation')
-        kf = KFold(len(y), n_folds=kfold)
-
-    if model == 'LR_L1':
-        model_clf = Lasso()
-        hyperparams = {'alpha':[0.2, 0.1, 0.05, 0.01]}
-        scale_data = True
-        feat_imp = True
-    elif model == 'SVR':
-        model_clf = SVR()
-        hyperparams = {'kernel':['linear','rbf'], 'C':[1,10,25]}
-        scale_data = True
-        feat_imp = True
-    elif model == 'RFR':
-        model_clf = RandomForestRegressor(n_jobs=6)
-        hyperparams = {'n_estimators':[10,25,50,100,200], 'min_samples_split':[2,4,6,8,10]}
-        scale_data = False
-        feat_imp = True
-    else:
-        logger.error('invalid model type {}'.format(model))
-
-    if scale_data:
-        X = preprocessing.scale(X)
-
-    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
-    hp_dict = collections.defaultdict(list)
-
-    # get training and test data for each fold
-    i = 1
-    for train_index, test_index in kf:
-        X_train, X_test = X[train_index], X[test_index]
-        y_train, y_test = y[train_index], y[test_index]
-
-        results = fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop)
-        logger.debug('fold {}/{}: R2 train={:04.2f}, test={:04.2f}'.format(
-            i, kfold, results['R2_train'], results['R2_test']))
-        i += 1
-
-        r_train.append(results['r_train'])
-        r_test.append(results['r_test'])
-        R2_train.append(results['R2_train'])
-        R2_test.append(results['R2_test'])
-        MSE_train.append(results['MSE_train'])
-        MSE_test.append(results['MSE_test'])
-        pred_scores.append(results['pred_scores'])
-        real_scores.append(results['real_scores'])
-
-        for hp in hyperparams:
-            hp_dict[hp].append(results['hp_dict'][hp])
-
-    # find out most frequent hyper-params during cross-val
-    hp_mode = {}
-    for hp in hyperparams:
-        hp_mode[hp] = mode(hp_dict[hp])[0][0]
-
-    logger.debug('most frequent hp: {}'.format(hp_mode))
-    logger.debug('Outer Loop {} CV={}:\n    r mean={:04.2f}+/-{:04.2f}\n    R2 mean={:04.2f}+/-{:04.2f}\n    MSE mean={:04.2f}+/-{:04.2f}'.format(
-        oloop, kfold, np.mean(r_test), stats.sem(r_test),
-                      np.mean(R2_test), stats.sem(R2_test),
-                      np.mean(MSE_test), stats.sem(MSE_test)))
-
-    return {'r_train':   r_train,
-            'r_test':    r_test,
-            'R2_train':  R2_train,
-            'R2_test':   R2_test,
-            'MSE_train': MSE_train,
-            'MSE_test':  MSE_test}
-
-def cluster(X):
-    """
-    Hierarchical clustering of the rows in X (subjects). Uses Ward's algorithm.
-    """
-    fig = plt.figure()
-    axd = fig.add_axes([0.09,0.1,0.2,0.8])
-    axd.set_xticks([])
-    axd.set_yticks([])
-
-    X = np.corrcoef(X)
-
-    link = sch.linkage(X, method='ward')
-    clst = sch.fcluster(link, 2, criterion='maxclust')
-    dend = sch.dendrogram(link, orientation='right')
-    idx = dend['leaves']
-    X = X[idx, :]
-    X = X[:, idx]
-
-    axm = fig.add_axes([0.3,0.1,0.6,0.8])
-    im = axm.matshow(X, aspect='auto', origin='lower', cmap=plt.cm.Reds, vmin=0, vmax=0.5)
-    axm.set_xticks([])
-    axm.set_yticks([])
-    axc = fig.add_axes([0.91,0.1,0.02,0.8])
-    plt.colorbar(im, cax=axc)
-    plt.show()
-    plt.savefig(os.path.join(HOME, 'corr.pdf'))
-
-    return clst
-
-def calc_xbrain(template_ts, participant_pop, timeseries, plot=False):
-    """
-    Calculates correlation of each participant in the dataframe participant_pop
-    with the appropriate slice of the input template matrix. The features are
-    concatenated for each participant and returned as the feature matrix X.
-    """
-    n = len(participant_pop)
-    X = np.zeros((n, template_ts.shape[1]*len(timeseries)))
-    logger.debug('xbrain feature matrix shape: {}'.format(X.shape))
-
-    for i in range(n):
-        xcorrs = np.array([])
-        for j, column in enumerate(timeseries):
-
-            try:
-                ts = read_timeseries(participant_pop, i, column)
-            except IOError as e:
-                logger.error(e)
-                sys.exit(1)
-
-            ts = pct_signal_change(ts)
-            # diag of the cross-variable corrs (upper right corner of matrix)
-            try:
-                rs = np.diag(np.corrcoef(ts.T, y=template_ts[:, :, j].T)[ts.shape[1]:, :ts.shape[1]])
-                xcorrs = np.concatenate((xcorrs, rs))
-            except:
-                raise Exception('xcorr failed due to missmatched dimensions: subject {} dims={}, template {} dims={}'.format(i, ts.shape, j, template_ts[:,:,j].shape))
-        X[i, :] = xcorrs
-
-    # remove values less than zero (not meaningful)
-    X[X < 0] = 0
-
-    return X
-
-def split_samples(db, n_template, predict, percentile=50):
-    """
-    Splits input database into a template database, which is n subjects of the
-    input population with values closest to the target percentile prediction
-    score of interest (default is the median, or 50%), and the remainer of the
-    sample population. Always picks an actual sample for the target percentile,
-    therefore, if an even number of values is submitted, will take the value
-    greater than the midpoint value normally calculated for the median.
-    """
-    db = db.sort(predict)
-
-    # find the target value without taking midpoints (favor higher value)
-    target = np.percentile(db[predict], percentile, interpolation='higher')
-    target_idx = np.percentile(np.where(db[predict] == target)[0], 50, interpolation='lower')
-    logger.debug('target percentile={}, score={}'.format(percentile, target))
-
-    # get template indicies
-    if is_even(n_template):
-        idx_lo = target_idx - n_template/2
-        idx_hi = target_idx + n_template/2
-    else:
-        idx_lo = target_idx - np.floor(n_template/2.0)
-        idx_hi = target_idx + np.ceil(n_template/2.0)
-
-    # split database into template and participant samples
-    template_idx = np.arange(idx_lo, idx_hi+1)
-    participants_idx = np.setdiff1d(np.arange(db.shape[0]), template_idx)
-    logger.debug('template subjects: {} - {}'.format(idx_lo, idx_hi))
-    logger.debug('participants: {}'.format(participants_idx))
-    template = db.iloc[template_idx]
-    participants = db.iloc[participants_idx]
-
-    return template, participants
-
-def get_template_ts(template, timeseries):
-    """
-    Accepts a template dataframe, and for each timeseries column, takes the
-    average timeseries activity. Returns a roi X timepoint X timeseries numpy
-    matrix.
-    """
-    dims = read_timeseries(template, 0, timeseries[0]).shape
-    template_ts = np.zeros((dims[0], dims[1], len(timeseries)))
-    n = len(template)
-
-    # take mean timeseries across template population for each timeseries type
-    for i, column in enumerate(timeseries):
-        for j in range(n):
-            ts = np.genfromtxt(template[column].iloc[j], delimiter=',')
-            ts = pct_signal_change(ts)
-            template_ts[:, :, i] += ts
-        template_ts[:, :, i] = template_ts[:, :, i] / float(n)
-
-    return template_ts
 
 def main():
     #arguments = docopt(__doc__)
@@ -454,6 +118,8 @@ def main():
     #two_template = arguments['--two-template']
     #debug        = arguments['--debug']
     #plot         = arguments['--plot']
+
+    global HOME
 
     # for testing
     database = '/projects/jviviano/data/xbrain/assets/database_xbrain.csv'
@@ -483,29 +149,29 @@ def main():
 
     # check and format inputs
     columns = []
-    if not is_probability(pct_template):
+    if not utils.is_probability(pct_template):
         logger.error('proportion of population to be template invalid: {} (0 < p < 1)'.format(pct_template))
         sys.exit(1)
 
-    if not is_probability(p):
+    if not utils.is_probability(p):
         logger.error('proportion of template population to use for each outer loop invalid: {} (0 < p < 1)'.format(p))
         sys.exit(1)
 
     if statmaps:
         statmaps = statmaps.split(',')
-        if not is_column(db, statmaps):
+        if not utils.is_column(db, statmaps):
             logger.error('not all statmap columns {} defined in {}'.format(statmaps, database))
             sys.exit(1)
         columns.extend(statmaps)
 
     if timeseries:
         timeseries = timeseries.split(',')
-        if not is_column(db, timeseries):
+        if not utils.is_column(db, timeseries):
             logger.error('not all timeseries columns {} defined in {}'.format(timeseries, database))
             sys.exit(1)
         columns.extend(timeseries)
 
-    if not is_column(db, predict):
+    if not utils.is_column(db, predict):
         logger.error('prediction column {} not defined in {}'.format(predict, database))
         sys.exit(1)
     columns.append(predict)
@@ -533,19 +199,19 @@ def main():
     if two_template:
         logger.debug('two template analysis: splitting sample into template & participant populations')
         logger.debug('finding high template: 80th percentile')
-        template_pop, participant_pop = split_samples(db, np.ceil(n_template/2), predict, percentile=80)
+        template_pop, participant_pop = utils.split_samples(db, np.ceil(n_template/2), predict, percentile=80)
         logger.debug('finding low template: 20th percentile')
-        template_pop_low, participant_pop = split_samples(participant_pop, np.ceil(n_template/2), predict, percentile=20)
+        template_pop_low, participant_pop = utils.split_samples(participant_pop, np.ceil(n_template/2), predict, percentile=20)
     else:
         logger.debug('one template analysis: splitting sample into template & participant populations')
         logger.debug('finding template: 50th percentile')
-        template_pop, participant_pop = split_samples(db, n_template, predict)
+        template_pop, participant_pop = utils.split_samples(db, n_template, predict)
 
     logger.debug('n template_pop: {}, n participant_pop: {}'.format(len(template_pop), len(participant_pop)))
     n_per_template = np.round(len(template_pop)*p)
 
     logger.debug('generating dependent variable vector y')
-    y = gather_dv(participant_pop, predict)
+    y = utils.gather_dv(participant_pop, predict)
 
     r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
 
@@ -558,15 +224,15 @@ def main():
             template_low = template_pop_low.iloc[idx]
 
         logger.debug('generating template timeseries')
-        template_ts = get_template_ts(template, timeseries)
+        template_ts = corr.get_template_ts(template, timeseries)
         if two_template:
-            template_ts_low = get_template_ts(template_low, timeseries)
+            template_ts_low = corr.get_template_ts(template_low, timeseries)
 
         logger.debug('calculating population cross-brain correlations with template')
         try:
-            X = calc_xbrain(template_ts, participant_pop, timeseries, plot=plot)
+            X = corr.calc_xbrain(template_ts, participant_pop, timeseries, plot=plot)
             if two_template:
-                X_low = calc_xbrain(template_ts_low, participant_pop, timeseries, plot=plot)
+                X_low = corr.calc_xbrain(template_ts_low, participant_pop, timeseries, plot=plot)
         except Exception as e:
             logger.error(e)
             sys.exit(1)
@@ -574,31 +240,22 @@ def main():
         if two_template:
             logger.debug('two template analysis: taking ratio of features from high and low templates')
             if plot:
-                plt.subplot(131)
-                plt.imshow(X, vmin=0, vmax=0.5, cmap=plt.cm.Reds)
-                plt.title('X high')
-                plt.subplot(132)
-                plt.imshow(X_low, vmin=0, vmax=0.5, cmap=plt.cm.Reds)
-                plt.title('X low')
-                plt.subplot(133)
-                plt.imshow(X - X_low, vmin=0, vmax=0.5, cmap=plt.cm.Reds)
-                plt.title('X ratio')
-                plt.savefig(os.path.join(HOME, 'X_iter={}.pdf'.format(i+1)))
-                plt.close()
+                corr.plot_features(X, HOME, i, X_low=X_low)
 
             X = X - X_low # take difference of high and low score templates
             X[np.isnan(X)] = 0 # remove nonsense values
             X[np.isinf(X)] = 0 # remove nonsense values
-        else:
-            if plot:
-                plt.imshow(X, vmin=-0, vmax=0.5, cmap=plt.cm.Reds)
-                plt.colorbar()
-                plt.savefig(os.path.join(HOME, 'X_iter={}.pdf'.format(i+1)))
-                plt.close()
+        elif plot:
+            corr.plot_features(X, HOME, i)
 
         logger.debug('INNER LOOP: template {}'.format(i+1))
+        if plot:
+            plotpath = HOME
+        else:
+            plotpath = None
+
         try:
-            results = classifier(X, y, k, i+1)
+            results = stats.classifier(X, y, k, i+1, plot=plotpath)
         except Exception as e:
             logger.error(e)
             sys.exit(1)
@@ -612,11 +269,11 @@ def main():
         MSE_test.append(results['MSE_test'])
 
     rmean = np.mean(r_test)
-    rsem = stats.sem(r_test)
+    rsem = sp.stats.sem(r_test)
     r2mean = np.mean(R2_test)
-    r2sem = stats.sem(R2_test)
+    r2sem = sp.stats.sem(R2_test)
     msemean = np.mean(MSE_test)
-    msesem = stats.sem(MSE_test)
+    msesem = sp.stats.sem(MSE_test)
 
     print('Results:\n  rmean={}\n rsem={}\n  r2mean={}\n  r2sem={}\n  MSEmean={}\n  MSEsem={}\n'.format(rmean, rsem, r2mean, r2sem, msemean, msesem))
 

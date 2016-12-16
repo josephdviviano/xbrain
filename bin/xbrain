@@ -183,17 +183,12 @@ def main():
     db = db.dropna(axis=0)
     logger.debug('reduced columns: {}\nclean rows in database (no NaNs): {}/{}'.format(columns, len(db), n_pre))
 
-    #logger.debug('analyzing full sample')
-    #template_ts = get_template_ts(db, timeseries)
-    #X = calc_xbrain(template_ts, db, timeseries, plot=False)
-    #y = gather_dv(db, predict)
-    #clst = cluster(X)
-    #plt.subplot(121)
-    #plt.hist(y[clst == 1])
-    #plt.subplot(122)
-    #plt.hist(y[clst == 2])
-    #plt.show()
-    #sys.exit()
+    if plot:
+        logger.debug('analyzing full sample')
+        template_ts = corr.get_template_ts(db, timeseries)
+        X = corr.calc_xbrain(template_ts, db, timeseries, plot=False)
+        y = utils.gather_dv(db, predict)
+        clst = stats.cluster(X, y, plot=HOME)
 
     n_template = np.round(db.shape[0] * pct_template)
     if two_template:

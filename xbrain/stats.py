@@ -42,7 +42,7 @@ def r_to_d(R):
 
 
 def standardize(X):
-    """Mean centers and z-scores each column of X."""
+    """z-scores each column of X."""
     return((X - X.mean(axis=0)) / X.std(axis=0))
 
 
@@ -337,63 +337,69 @@ def classifier(X, y, kfold, oloop=1, model='RFR', stratified=False, plot=None):
             'MSE_test':  MSE_test}
 
 
-def cluster(X, Y, subjects, diagnosis, n_clust=3):
+def cluster(X, y, plot=None, n_clust=2):
     """
     Creates a distance matrix out of the input matrix Y. Clustering is run on
     this matrix using hierarchical clustering (Ward's algorithm). The data is
     ploted, and the variables in X are shown for all groups in each cluster.
     """
-    R = np.corrcoef(Y)   # correlations of Z-scored correlations, as in Finn et al. 2015.
-
     # hierarchical clustering
     fig = plt.figure()
     axd = fig.add_axes([0.09,0.1,0.2,0.8])
     axd.set_xticks([])
     axd.set_yticks([])
-    link = sch.linkage(R, method='ward')
+    link = sch.linkage(X, method='ward')
     clst = sch.fcluster(link, n_clust, criterion='maxclust')
 
-    # plot
-    dend = sch.dendrogram(link, orientation='right')
-    idx = dend['leaves']
-    R = reorder(R, idx, symm=True)
-    subjects = np.asarray(subjects)[idx] # reorder subjects
-    axm = fig.add_axes([0.3,0.1,0.6,0.8])
-    im = axm.matshow(R, aspect='auto', origin='lower', cmap=plt.cm.Reds, vmin=0.3, vmax=0.6)
-    axm.set_xticks(np.arange(len(subjects)))
-    axm.set_yticks([])
-    axm.set_xticklabels(subjects)
-    axc = fig.add_axes([0.91,0.1,0.02,0.8])
-    plt.colorbar(im, cax=axc)
-    plt.savefig('outputs/corr.pdf')
-    plt.close()
+    if plot:
+        dend = sch.dendrogram(link, orientation='right')
+        idx = dend['leaves']
+        X = utils.reorder(X, idx, symm=False)
+        axm = fig.add_axes([0.3,0.1,0.6,0.8])
+        im = axm.matshow(X, aspect='auto', origin='lower', cmap=plt.cm.Reds, vmin=0.3, vmax=0.6)
+        axm.set_xticks([])
+        axm.set_yticks([])
+        axc = fig.add_axes([0.91,0.1,0.02,0.8])
+        plt.colorbar(im, cax=axc)
+        plt.savefig(os.path.join(plot, 'xbrain_clusters.pdf'))
+        plt.close()
 
-    # create dataframe for seaborn
-    X = standardize(X)
-    df = np.hstack((X, np.atleast_2d(diagnosis).T))
-    df = np.hstack((df, np.atleast_2d(clst).T))
-    columns.append('diagnosis')
-    columns.append('cluster')
-    df = pd.DataFrame(data=df, columns=columns[1:])
-    df = pd.melt(df, id_vars=['diagnosis', 'cluster'], value_vars=columns[1:-2])
+        # create seaborn dataframe
+        y = standardize(y)
+        df = np.hstack((np.atleast_2d(y).T, np.atleast_2d(clst).T))
+        df = pd.DataFrame(data=df, columns=['y', 'cluster'])
+        df = pd.melt(df, id_vars=['cluster'], value_vars=['y'])
 
-    # plot clinical variables by cluster
-    b = sns.boxplot(x="variable", y="value", hue="cluster", data=df, palette="Set3")
-    for item in b.get_xticklabels():
-        item.set_rotation(45)
-    sns.plt.savefig('outputs/stats.pdf')
-    sns.plt.close()
+        # plot clinical variables by cluster
+        b = sns.boxplot(x="variable", y="value", hue="cluster", data=df, palette="Set3")
+        for item in b.get_xticklabels():
+            item.set_rotation(45)
+        sns.plt.savefig(os.path.join(plot, 'xbrain_cluster_box.pdf'))
+        sns.plt.close()
+        distributions(y, clst, os.path.join(plot, 'xbrain_cluster_distributions.pdf'))
 
-    # get mean and SD of clinical variables
-    means = np.zeros((X.shape[1], len(np.unique(clst))))
-    stds  = np.zeros((X.shape[1], len(np.unique(clst))))
-    for x in range(X.shape[1]):
-        for c in np.unique(clst):
-            means[x, c-1] = np.mean(X[clst == c, x])
-            stds[x, c-1] = np.std(X[clst == c, x])
-    means = ((means.T - means.mean(axis=1))).T
+        # get mean and SD of clinical variables
+        means = np.zeros((X.shape[1], len(np.unique(clst))))
+        stds  = np.zeros((X.shape[1], len(np.unique(clst))))
+        for x in range(X.shape[1]):
+            for c in np.unique(clst):
+                means[x, c-1] = np.mean(X[clst == c, x])
+                stds[x, c-1] = np.std(X[clst == c, x])
+        means = ((means.T - means.mean(axis=1))).T
 
     return clst, idx, means
+
+
+def distributions(y, clst, plot):
+    """Plots data distribution by cluster."""
+    unique = np.unique(clst)
+    n = len(unique)
+    for i in unique:
+        plt.subplot(1, n, i)
+        # Plot a kernel density estimate and rug plot
+        sns.distplot(y[clst == i], hist=False, rug=True, color="r")
+    sns.plt.savefig(plot)
+    sns.plt.close()
 
 
 def cluster2(X, plot):
@@ -424,4 +430,5 @@ def cluster2(X, plot):
     plt.savefig(os.path.join(plot, 'corr.pdf'))
 
     return clst
+
 

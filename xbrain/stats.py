@@ -250,7 +250,7 @@ def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop, plo
             'real_scores': y_test}
 
 
-def classifier(X, y, kfold, oloop=1, model='RFR', stratified=False, plot=None):
+def classifier(X, y, kfold, oloop=1, model='LR_L1', stratified=False, plot=None):
     """
     Builds and trains a classifier to predict y from the feature matrix X using
     kfold cross-validation and

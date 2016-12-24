@@ -125,15 +125,15 @@ def main():
     database = '/projects/jviviano/data/xbrain/assets/database_xbrain.csv'
     timeseries = 'ts_imi'
     statmaps = None
-    predict = 'Part2_TotalCorrect'
+    predict = 'Part1_TotalCorrect'
     roi_mask = None
     pct_template = 0.30
     n = 5
     p = 0.5
     k = 3
     two_template = True
-    debug = True
-    plot = True
+    debug = False
+    plot = False
 
     logger.info('starting')
     if debug:
@@ -183,12 +183,22 @@ def main():
     db = db.dropna(axis=0)
     logger.debug('reduced columns: {}\nclean rows in database (no NaNs): {}/{}'.format(columns, len(db), n_pre))
 
+    logger.debug('analyzing full sample')
+    template_ts = corr.get_template_ts(db, timeseries)
+    X = corr.calc_xbrain(template_ts, db, timeseries, plot=False)
+    y = utils.gather_dv(db, predict)
+    F, F_null, v = stats.mdmr(y.T, X)
+    print('variance explained in xcorr by cognitive variables: {}'.format(v))
+    thresholds = stats.sig_cutoffs(F_null, two_sided=False)
+    if F > thresholds[1]:
+        print('F significant, F={} > {}\nvariance explained={}'.format(F, thresholds[1], v))
+    else:
+        print('WARNING: no relationship detected between subject distance matrix and cogntivie variable\nvariance explained={}'.format(v))
+
     if plot:
-        logger.debug('analyzing full sample')
-        template_ts = corr.get_template_ts(db, timeseries)
-        X = corr.calc_xbrain(template_ts, db, timeseries, plot=False)
-        y = utils.gather_dv(db, predict)
         clst = stats.cluster(X, y, plot=HOME)
+
+    sys.exit()
 
     n_template = np.round(db.shape[0] * pct_template)
     if two_template:

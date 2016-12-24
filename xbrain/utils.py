@@ -76,8 +76,7 @@ def split_samples(db, n_template, predict, percentile=50):
     # split database into template and participant samples
     template_idx = np.arange(idx_lo, idx_hi+1)
     participants_idx = np.setdiff1d(np.arange(db.shape[0]), template_idx)
-    logger.debug('template subjects: {} - {}'.format(idx_lo, idx_hi))
-    logger.debug('participants: {}'.format(participants_idx))
+    logger.debug('template subjects: {} - {}'.format(int(idx_lo), int(idx_hi)))
     template = db.iloc[template_idx]
     participants = db.iloc[participants_idx]
 

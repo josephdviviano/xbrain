@@ -49,16 +49,16 @@ def standardize(X):
 def sig_cutoffs(null, two_sided=True):
     """Returns the significance cutoffs of the submitted null distribution."""
     if two_sided:
-        sig = np.array([np.percentile(F_null, 2.5), np.percentile(F_null, 97.5)])
+        sig = np.array([np.percentile(null, 2.5), np.percentile(null, 97.5)])
     else:
-        sig = np.array([np.percentile(F_null, 5), np.percentile(F_null, 95)])
+        sig = np.array([np.percentile(null, 5), np.percentile(null, 95)])
 
     return(sig)
 
 
 def gowers_matrix(D):
     """Calculates Gower's centered matrix from a distance matrix."""
-    assert_square(D)
+    utils.assert_square(D)
 
     n = float(D.shape[0])
     o = np.ones((n, 1))
@@ -74,7 +74,7 @@ def hat_matrix(X):
     Caluclates distance-based hat matrix for an NxM matrix of M predictors from
     N variables. Adds the intercept term for you.
     """
-    X = np.hstack((np.ones((X.shape[0], 1)), X)) # add intercept
+    X = np.hstack((np.ones((X.shape[0], 1)), np.atleast_2d(X).T)) # add intercept
     Q1, R1 = np.linalg.qr(X)
     H = Q1.dot(Q1.T)
 
@@ -85,8 +85,8 @@ def calc_F(H, G, m=None):
     """
     Calculate the F statistic when comparing two matricies.
     """
-    assert_square(H)
-    assert_square(G)
+    utils.assert_square(H)
+    utils.assert_square(G)
 
     n = H.shape[0]
     I = np.identity(n)
@@ -128,12 +128,10 @@ def variance_explained(H, G):
     Calculates variance explained in the distance matrix by the M predictor
     variables in X.
     """
-    assert_square(H)
-    assert_square(G)
+    utils.assert_square(H)
+    utils.assert_square(G)
 
-    variance = (np.trace(H.dot(G).dot(H))) / np.trace(G)
-
-    return(variance)
+    return((np.trace(H.dot(G).dot(H))) / np.trace(G))
 
 
 def mdmr(X, Y):
@@ -141,9 +139,6 @@ def mdmr(X, Y):
     Multvariate regression analysis of distance matricies: regresses variables
     of interest X (behavioural) onto a matrix representing the similarity of
     connectivity profiles Y.
-
-    Finn et al. 2015. Functional connectome fingerprinting: identifying
-    individuals using patterns of brain connectivity. Nature Neuroscience 18(11)
 
     Zapala & Schork, 2006. Multivariate regression analysis of distance matrices
     for testing association between gene expression patterns related variables.
@@ -153,7 +148,7 @@ def mdmr(X, Y):
         raise Exception('X is not full rank:\ndimensions = {}'.format(X.shape))
 
     X = standardize(X)   # mean center and Z-score all cognitive variables
-    R = np.corrcoef(Y)   # correlations of Z-scored correlations, as in Finn et al. 2015.
+    R = np.corrcoef(Y)   # correlation distance between each cross-brain correlation vector
     D = r_to_d(R)        # distance matrix of correlation matrix
     G = gowers_matrix(D) # centered distance matrix (connectivity similarities)
     H = hat_matrix(X)    # hat matrix of regressors (cognitive variables)
@@ -162,6 +157,7 @@ def mdmr(X, Y):
     v = variance_explained(H, G)
 
     return F, F_null, v
+
 
 def backwards_selection(X, Y):
     """
@@ -255,8 +251,7 @@ def classifier(X, y, kfold, oloop=1, model='LR_L1', stratified=False, plot=None)
     Builds and trains a classifier to predict y from the feature matrix X using
     kfold cross-validation and
     """
-    # transforms label values
-    # only for classification!!
+    # transforms label values for classification
     #le = preprocessing.LabelEncoder()
     #le.fit(y)
     #y_labels = le.transform(y)
@@ -283,7 +278,7 @@ def classifier(X, y, kfold, oloop=1, model='LR_L1', stratified=False, plot=None)
         feat_imp = True
     elif model == 'RFR':
         model_clf = RandomForestRegressor(n_jobs=6)
-        hyperparams = {'n_estimators':[10,25,50,100,200], 'min_samples_split':[2,4,6,8,10]}
+        hyperparams = {'n_estimators':[10,50,100,200,500], 'min_samples_split':[2,5,10,20,50]}
         scale_data = False
         feat_imp = True
     else:

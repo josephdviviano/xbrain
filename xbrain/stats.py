@@ -4,6 +4,8 @@
 import os, sys, glob, copy
 import collections
 import logging
+import random
+import string
 
 import numpy as np
 import scipy as sp
@@ -13,12 +15,11 @@ from scipy.stats import mode
 import pandas as pd
 from sklearn import preprocessing
 from sklearn import grid_search
-from sklearn.cross_validation import KFold
-from sklearn.cross_validation import StratifiedKFold
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Lasso
 from sklearn.svm import SVR
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import mean_squared_error as mse
 
 import matplotlib
@@ -29,7 +30,6 @@ import seaborn as sns
 import xbrain.utils as utils
 
 logger = logging.getLogger(__name__)
-
 
 def r_to_z(R):
     """Fischer's r-to-z transform on a matrix (elementwise)."""
@@ -199,73 +199,31 @@ def cv_loop(model_clf, hyperparams, X_train, y_train):
     return clf
 
 
-def fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop, plot=None):
+def make_classes(y):
+    """transforms label values for classification"""
+    le = preprocessing.LabelEncoder()
+    le.fit(y)
+    return(le.transform(y))
+
+
+def classify(X_train, X_test, y_train, y_test, model='RFC', plot=None):
     """
-    Computes a single fold
+    Trains the selected classifier once on the submitted training data, and
+    compares the predicted outputs of the test data with the real labels.
+    Includes a hyper-parameter cross validation loop, the 'innermost' loop.
+    Returns a set of metrics collected from the hyperparameter grid search and
+    the test error.
     """
-    # store best hyper-parameter for each fold
+    if X_train.shape[0] != y_train.shape[0]:
+        raise Exception('X_train shape {} does not equal y_train shape {}'.format(X_train.shape[0], y_train.shape[0]))
+    if X_test.shape[0] != y_test.shape[0]:
+        raise Exception('X_test shape {} does not equal y_test shape {}'.format(X_test.shape[0], y_test.shape[0]))
+
     hp_dict = collections.defaultdict(list)
+    hp_mode = {}
+    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
 
-    # INNERMOST LOOP: CV of hyperparameters for this fold. Returns best clf.
-    clf = cv_loop(model_clf, hyperparams, X_train, y_train)
-
-    for hp in hyperparams:
-        hp_dict[hp].append(clf.best_estimator_.get_params()[hp])
-
-    r_train = stats.pearsonr(clf.predict(X_train), y_train)[0] # remove p vals
-    r_test = stats.pearsonr(clf.predict(X_test), y_test)[0]    #
-    R2_train = clf.score(X_train, y_train)
-    R2_test = clf.score(X_test, y_test)
-    MSE_train = mse(clf.predict(X_train), y_train)
-    MSE_test = mse(clf.predict(X_test), y_test)
-
-    # visualization
-    if plot:
-        plt.scatter(clf.predict(X_test), y_test)
-        plt.xlabel('predictions')
-        plt.ylabel('true scores')
-        plt.savefig(os.path.join(plot, 'test_predicit_oloop-{}_fold-{}.pdf'.format(oloop, i)))
-        plt.close()
-
-    # check feature importance (QC for HC importance)
-    # for fid in np.arange(10):
-    #     model_clf.fit(X_train[fid],y_train[fid])
-    #     feat_imp = model_clf.feature_importances_
-    #     print
-    #     print 'fid: {} r: {}'.format(fid, zip(*CV_r_valid)[0][fid])
-    #     print feat_imp[70:], np.argsort(feat_imp)[70:]
-
-    return {'r_train':   r_train,
-            'r_test':    r_test,
-            'R2_train':  R2_train,
-            'R2_test':   R2_test,
-            'MSE_train': MSE_train,
-            'MSE_test':  MSE_test,
-            'hp_dict':   hp_dict,
-            'pred_scores': clf.predict(X_test),
-            'real_scores': y_test}
-
-
-def classifier(X, y, kfold, oloop=1, model='LR_L1', stratified=False, plot=None):
-    """
-    Builds and trains a classifier to predict y from the feature matrix X using
-    kfold cross-validation and
-    """
-    # transforms label values for classification
-    #le = preprocessing.LabelEncoder()
-    #le.fit(y)
-    #y_labels = le.transform(y)
-
-    if X.shape[0] != y.shape[0]:
-        raise Exception('X has {} rows, y has {} rows'.format(X.shape[0], y.shape[0]))
-
-    if stratified:
-        logger.debug('stratified kfold cross-validation')
-        kf = StratifiedKFold(y_labels, n_folds=kfold)
-    else:
-        logger.debug('kfold cross-validation')
-        kf = KFold(len(y), n_folds=kfold)
-
+    # for testing various models, includes grid search settings
     if model == 'LR_L1':
         model_clf = Lasso()
         hyperparams = {'alpha':[0.2, 0.1, 0.05, 0.01]}
@@ -281,55 +239,63 @@ def classifier(X, y, kfold, oloop=1, model='LR_L1', stratified=False, plot=None)
         hyperparams = {'n_estimators':[10,50,100,200,500], 'min_samples_split':[2,5,10,20,50]}
         scale_data = False
         feat_imp = True
+    elif model == 'RFC':
+        model_clf = RandomForestClassifier(n_jobs=6)
+        hyperparams = {'n_estimators':[10,50,100,200,500], 'min_samples_split':[2,5,10,20,50]}
+        scale_data = False
+        feat_imp = True
     else:
         logger.error('invalid model type {}'.format(model))
+        sys.exit(1)
 
     if scale_data:
-        X = preprocessing.scale(X)
+        X_train = preprocessing.scale(X_train)
+        X_test = preprocessing.scale(X_test)
 
-    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
-    hp_dict = collections.defaultdict(list)
+    logger.debug('Innermost Loop: CV of hyperparameters for this fold')
+    clf = cv_loop(model_clf, hyperparams, X_train, y_train) # returns 1 best clf
 
-    # get training and test data for each fold
-    i = 1
-    for train_index, test_index in kf:
-        X_train, X_test = X[train_index], X[test_index]
-        y_train, y_test = y[train_index], y[test_index]
+    # collect all the best hyperparameters found in the cv loop
+    for hp in hyperparams:
+        hp_dict[hp].append(clf.best_estimator_.get_params()[hp])
 
-        results = fold(X_train, y_train, X_test, y_test, model_clf, hyperparams, i, oloop, plot=plot)
-        logger.debug('fold {}/{}: R2 train={:04.2f}, test={:04.2f}'.format(
-            i, kfold, results['R2_train'], results['R2_test']))
-        i += 1
-
-        r_train.append(results['r_train'])
-        r_test.append(results['r_test'])
-        R2_train.append(results['R2_train'])
-        R2_test.append(results['R2_test'])
-        MSE_train.append(results['MSE_train'])
-        MSE_test.append(results['MSE_test'])
-        pred_scores.append(results['pred_scores'])
-        real_scores.append(results['real_scores'])
-
-        for hp in hyperparams:
-            hp_dict[hp].append(results['hp_dict'][hp])
-
-    # find out most frequent hyper-params during cross-val
-    hp_mode = {}
+    # find out most frequent hyperparameters during cross-val
     for hp in hyperparams:
         hp_mode[hp] = mode(hp_dict[hp])[0][0]
-
     logger.debug('most frequent hp: {}'.format(hp_mode))
-    logger.debug('Outer Loop {} CV={}:\n    r mean={:04.2f}+/-{:04.2f}\n    R2 mean={:04.2f}+/-{:04.2f}\n    MSE mean={:04.2f}+/-{:04.2f}'.format(
-        oloop, kfold, np.mean(r_test), stats.sem(r_test),
-                      np.mean(R2_test), stats.sem(R2_test),
-                      np.mean(MSE_test), stats.sem(MSE_test)))
 
+    # collect test / training data stats
+    r_train = stats.pearsonr(clf.predict(X_train), y_train)[0] # remove p vals
+    r_test = stats.pearsonr(clf.predict(X_test), y_test)[0]    #
+    R2_train = clf.score(X_train, y_train)
+    R2_test = clf.score(X_test, y_test)
+    MSE_train = mse(clf.predict(X_train), y_train)
+    MSE_test = mse(clf.predict(X_test), y_test)
+
+    # print out model accuracy
+    if plot:
+        uid = ''.join(random.choice(string.ascii_lowercase) for i in range(6))
+        plt.scatter(clf.predict(X_test), y_test)
+        plt.xlabel('predictions')
+        plt.ylabel('true scores')
+        plt.savefig(os.path.join(plot, 'test_predict_{}.pdf'.format(uid)))
+        plt.close()
+
+    # check feature importance (QC for HC importance)
+    # for fid in np.arange(10):
+    #     model_clf.fit(X_train[fid],y_train[fid])
+    #     feat_imp = model_clf.feature_importances_
+    #     print('\nfid: {} r: {}'.format(fid, zip(*CV_r_valid)[0][fid]))
+    #     print(feat_imp[70:], np.argsort(feat_imp)[70:])
     return {'r_train':   r_train,
             'r_test':    r_test,
             'R2_train':  R2_train,
             'R2_test':   R2_test,
             'MSE_train': MSE_train,
-            'MSE_test':  MSE_test}
+            'MSE_test':  MSE_test,
+            'hp_dict':   hp_dict,
+            'pred_scores': clf.predict(X_test),
+            'real_scores': y_test}
 
 
 def cluster(X, y, plot=None, n_clust=2):

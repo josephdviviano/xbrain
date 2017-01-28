@@ -18,9 +18,10 @@ Options:
     --n             Number of monte-carlo simulations to run for the outer loop [default: 10]
     --p             Proportion (0 < p < 1) of template subjects taken for each outer loop simulation [default: 0.5]
     --k             Number of folds done for the inner loop cross-validation [default: 5]
-    --two-template  Use a two template model, one template for subjects with high y scores, and one with low y scores.
+    --cutoff        Percentile cutoff (0 < p < 0.5) to seperate the low and high y score group [default: 0.5]
+    --two-template  Use a two template model: contrast high and low y scores.
     --debug         Verbose outputs.
-    --plot          Print out diagnostic plots in .svg format to the current directory.
+    --plot          Print out diagnostic plots to the home directory.
 
 DETAILS
 
@@ -92,7 +93,10 @@ import logging
 
 import numpy as np
 import scipy as sp
+from scipy.stats import sem
 import pandas as pd
+from sklearn.cross_validation import KFold
+from sklearn.cross_validation import StratifiedKFold
 
 import xbrain.docopt as docopt
 import xbrain.utils as utils
@@ -115,6 +119,7 @@ def main():
     #n            = int(arguments['--n'])
     #p            = float(arguments['--p'])
     #k            = int(arguments['--k'])
+    #cutoff       = float(arguments['--cutoff'])
     #two_template = arguments['--two-template']
     #debug        = arguments['--debug']
     #plot         = arguments['--plot']
@@ -131,15 +136,15 @@ def main():
     n = 5
     p = 0.5
     k = 3
+    cutoff = 0.2
     two_template = True
-    debug = False
-    plot = False
+    debug = True
+    plot = True
 
     logger.info('starting')
     if debug:
         logger.setLevel(logging.DEBUG)
 
-    # logging
     logger.debug('checking inputs')
     try:
         db = pd.read_csv(database)
@@ -155,6 +160,10 @@ def main():
 
     if not utils.is_probability(p):
         logger.error('proportion of template population to use for each outer loop invalid: {} (0 < p < 1)'.format(p))
+        sys.exit(1)
+
+    if not utils.is_probability(cutoff*2):
+        logger.error('group cutoff percentile invalid: {} (0 < p < 0.5)'.format(cutoff))
         sys.exit(1)
 
     if statmaps:
@@ -183,102 +192,136 @@ def main():
     db = db.dropna(axis=0)
     logger.debug('reduced columns: {}\nclean rows in database (no NaNs): {}/{}'.format(columns, len(db), n_pre))
 
-    logger.debug('analyzing full sample')
-    template_ts = corr.get_template_ts(db, timeseries)
-    X = corr.calc_xbrain(template_ts, db, timeseries, plot=False)
-    y = utils.gather_dv(db, predict)
-    F, F_null, v = stats.mdmr(y.T, X)
-    print('variance explained in xcorr by cognitive variables: {}'.format(v))
-    thresholds = stats.sig_cutoffs(F_null, two_sided=False)
-    if F > thresholds[1]:
-        print('F significant, F={} > {}\nvariance explained={}'.format(F, thresholds[1], v))
-    else:
-        print('WARNING: no relationship detected between subject distance matrix and cogntivie variable\nvariance explained={}'.format(v))
+    # pre-test: use MDMR to detect relationship between cognitive variables and
+    # brain data. Cluster brain data, and show the mean cognitive score in each
+    # cluster. Good v scores are ~ 0.1, or 10%.
+    #logger.debug('pre-test: detecting gross relationship between neural and cognitive data')
+    #ts = corr.get_template_ts(db, timeseries)
+    #X = corr.calc_xbrain(ts, db, timeseries, plot=False)
+    #y = utils.gather_dv(db, predict)
+    #F, F_null, v = stats.mdmr(y.T, X)
+    #thresholds = stats.sig_cutoffs(F_null, two_sided=False)
 
-    if plot:
-        clst = stats.cluster(X, y, plot=HOME)
+    #if F > thresholds[1]:
+    #    logger.info('pre-test: relationship detected: F={} > {}, variance explained={}'.format(F, thresholds[1], v))
+    #else:
+    #    logger.warn('pre-test: no relationship detected, variance explained={}'.format(v))
 
-    sys.exit()
-
-    n_template = np.round(db.shape[0] * pct_template)
-    if two_template:
-        logger.debug('two template analysis: splitting sample into template & participant populations')
-        logger.debug('finding high template: 80th percentile')
-        template_pop, participant_pop = utils.split_samples(db, np.ceil(n_template/2), predict, percentile=80)
-        logger.debug('finding low template: 20th percentile')
-        template_pop_low, participant_pop = utils.split_samples(participant_pop, np.ceil(n_template/2), predict, percentile=20)
-    else:
-        logger.debug('one template analysis: splitting sample into template & participant populations')
-        logger.debug('finding template: 50th percentile')
-        template_pop, participant_pop = utils.split_samples(db, n_template, predict)
-
-    logger.debug('n template_pop: {}, n participant_pop: {}'.format(len(template_pop), len(participant_pop)))
-    n_per_template = np.round(len(template_pop)*p)
+    #if plot:
+    #    clst = stats.cluster(X, y, plot=HOME)
 
     logger.debug('generating dependent variable vector y')
-    y = utils.gather_dv(participant_pop, predict)
+    y = utils.gather_dv(db, predict, cutoff=cutoff)
 
     r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
 
-    # outer loop: take a random subsample (p%) of the template population
-    for i in range(n):
-        logger.debug('OUTER LOOP: template {}'.format(i+1))
-        idx = np.sort(np.random.permutation(np.arange(len(template_pop)))[:n_per_template])
-        template = template_pop.iloc[idx]
+    # stratified k-fold cross validation: split into train and test sets
+    y_labels = stats.make_classes(y)
+    logger.debug('stratified kfold cross-validation')
+    kf = StratifiedKFold(y_labels, n_folds=k)
+    #logger.debug('kfold cross-validation')
+    #kf = KFold(len(y), n_folds=kfold)
+
+    logger.debug('Outer Loop: {} fold cross validation'.format(k))
+    for train_idx, test_idx in kf:
+
+        # split database into test and train groups
+        test_db = db.iloc[test_idx]
+        train_db = db.iloc[train_idx]
+
+        # extract a set of template subjects from the train sample
+        n_template = np.round(train_db.shape[0] * pct_template)
         if two_template:
-            template_low = template_pop_low.iloc[idx]
-
-        logger.debug('generating template timeseries')
-        template_ts = corr.get_template_ts(template, timeseries)
-        if two_template:
-            template_ts_low = corr.get_template_ts(template_low, timeseries)
-
-        logger.debug('calculating population cross-brain correlations with template')
-        try:
-            X = corr.calc_xbrain(template_ts, participant_pop, timeseries, plot=plot)
-            if two_template:
-                X_low = corr.calc_xbrain(template_ts_low, participant_pop, timeseries, plot=plot)
-        except Exception as e:
-            logger.error(e)
-            sys.exit(1)
-
-        if two_template:
-            logger.debug('two template analysis: taking ratio of features from high and low templates')
-            if plot:
-                corr.plot_features(X, HOME, i, X_low=X_low)
-
-            X = X - X_low # take difference of high and low score templates
-            X[np.isnan(X)] = 0 # remove nonsense values
-            X[np.isinf(X)] = 0 # remove nonsense values
-        elif plot:
-            corr.plot_features(X, HOME, i)
-
-        logger.debug('INNER LOOP: template {}'.format(i+1))
-        if plot:
-            plotpath = HOME
+            logger.info('two template analysis ({}th percentile, {}th percentile)'.format(cutoff, 1-cutoff))
+            template_db = utils.find_template(train_db, np.ceil(n_template/2), predict, percentile=cutoff*100)
+            template_db_low = utils.find_template(train_db, np.ceil(n_template/2), predict, percentile=(1-cutoff)*100)
         else:
-            plotpath = None
+            logger.info('one template analysis ({}th percentile)'.format(cutoff))
+            template_db = utils.find_template(train_db, n_template, predict, percentile=cutoff*100)
 
-        try:
-            results = stats.classifier(X, y, k, i+1, plot=plotpath)
-        except Exception as e:
-            logger.error(e)
-            sys.exit(1)
+        logger.debug('n template: {}/{}'.format(len(template_db), len(train_db)))
+        n_per_template = np.round(len(template_db)*p)
 
-        # append inner loop fold results for each iter of outer loop
-        r_train.append(results['r_train'])
-        r_test.append(results['r_test'])
-        R2_train.append(results['R2_train'])
-        R2_test.append(results['R2_test'])
-        MSE_train.append(results['MSE_train'])
-        MSE_test.append(results['MSE_test'])
+        # monte carlo permutation: take random subsets of the template
+        for i in range(n):
+            logger.debug('Inner Loop: template permutation {}/{}'.format(i+1, n+1))
+            idx = np.sort(np.random.permutation(np.arange(len(template_db)))[:n_per_template])
 
+            logger.debug('calculating xbrain correlations with template')
+            ts = corr.get_template_ts(template_db.iloc[idx], timeseries)
+
+            try:
+                X_train = corr.calc_xbrain(ts, train_db, timeseries, plot=plot)
+                X_test = corr.calc_xbrain(ts, test_db, timeseries, plot=plot)
+            except Exception as e:
+                logger.error(e)
+                sys.exit(1)
+
+            if two_template:
+                logger.debug('calculating difference of high and low templates')
+                ts_low = corr.get_template_ts(template_db_low.iloc[idx], timeseries)
+
+                try:
+                    X_train_low = corr.calc_xbrain(ts_low, train_db, timeseries, plot=plot)
+                    X_test_low = corr.calc_xbrain(ts_low, test_db, timeseries, plot=plot)
+                except Exception as e:
+                    logger.error(e)
+                    sys.exit(1)
+
+                    # plot the two feature matricies before taking ratio
+                    if plot:
+                        corr.plot_features(X_train, HOME, i, X_low=X_train_low)
+
+                X_train = X_train - X_train_low # take difference
+                X_test = X_test - X_test_low    #
+                X_train[np.isnan(X_train)] = 0  # remove nonsense values
+                X_test[np.isnan(X_test)] = 0    #
+                X_train[np.isinf(X_train)] = 0  #
+                X_test[np.isinf(X_test)] = 0    #
+                y_train = utils.gather_dv(train_db, predict, cutoff=cutoff)
+                y_test = utils.gather_dv(test_db, predict, cutoff=cutoff)
+
+            if plot:
+                corr.plot_features(X_train, HOME, i)
+
+            if plot:
+                plotpath = HOME
+            else:
+                plotpath = None
+
+            try:
+                results = stats.classify(X_train, X_test, y_train, y_test, plot=plotpath)
+            except Exception as e:
+                logger.error(e)
+                sys.exit(1)
+
+            # append the results of each iteration (representing a single
+            # template permutation for a single fold).
+            r_train.append(results['r_train'])
+            r_test.append(results['r_test'])
+            R2_train.append(results['R2_train'])
+            R2_test.append(results['R2_test'])
+            MSE_train.append(results['MSE_train'])
+            MSE_test.append(results['MSE_test'])
+
+        # print intermediate aggregate stats
+        logger.debug('train scores:\n    r   ={:04.2f}+/-{:04.2f}\n    R2  ={:04.2f}+/-{:04.2f}\n    MSE ={:04.2f}+/-{:04.2f}'.format(
+            np.mean(r_train), sem(r_train),
+            np.mean(R2_train), sem(R2_train),
+            np.mean(MSE_train), sem(MSE_train)))
+
+        logger.debug('test scores:\n    r    ={:04.2f}+/-{:04.2f}\n    R2  ={:04.2f}+/-{:04.2f}\n    MSE ={:04.2f}+/-{:04.2f}'.format(
+            np.mean(r_test), sem(r_test),
+            np.mean(R2_test), sem(R2_test),
+            np.mean(MSE_test), sem(MSE_test)))
+
+    # final results
     rmean = np.mean(r_test)
-    rsem = sp.stats.sem(r_test)
+    rsem = sem(r_test)
     r2mean = np.mean(R2_test)
-    r2sem = sp.stats.sem(R2_test)
+    r2sem = sem(R2_test)
     msemean = np.mean(MSE_test)
-    msesem = sp.stats.sem(MSE_test)
+    msesem = sem(MSE_test)
 
     print('Results:\n  rmean={}\n rsem={}\n  r2mean={}\n  r2sem={}\n  MSEmean={}\n  MSEsem={}\n'.format(rmean, rsem, r2mean, r2sem, msemean, msesem))
 

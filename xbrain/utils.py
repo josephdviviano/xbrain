@@ -4,6 +4,7 @@ import pickle
 import numpy as np
 import pandas as pd
 import logging
+from copy import copy
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +50,14 @@ def scrub_data(x):
     return x
 
 
-def split_samples(db, n_template, predict, percentile=50):
+def find_template(db, n_template, predict, percentile=50):
     """
-    Splits input database into a template database, which is n subjects of the
-    input population with values closest to the target percentile prediction
-    score of interest (default is the median, or 50%), and the remainer of the
-    sample population. Always picks an actual sample for the target percentile,
-    therefore, if an even number of values is submitted, will take the value
-    greater than the midpoint value normally calculated for the median.
+    Copies a subset of the input database into a template database, which is n
+    subjects of the input population with values closest to the target y score
+    of interest (by percentile, default is the median, or 50%). Always picks an
+    actual sample for the target percentile, therefore, if an even number of
+    values is submitted, will take the value greater than the midpoint value
+    normally calculated for the median.
     """
     db = db.sort(predict)
 
@@ -75,12 +76,10 @@ def split_samples(db, n_template, predict, percentile=50):
 
     # split database into template and participant samples
     template_idx = np.arange(idx_lo, idx_hi+1)
-    participants_idx = np.setdiff1d(np.arange(db.shape[0]), template_idx)
     logger.debug('template subjects: {} - {}'.format(int(idx_lo), int(idx_hi)))
     template = db.iloc[template_idx]
-    participants = db.iloc[participants_idx]
 
-    return template, participants
+    return template
 
 
 def is_probability(x):
@@ -114,9 +113,23 @@ def is_even(n):
     return False
 
 
-def gather_dv(participant_pop, predict):
-    """Returns a numpy vector of the predicted column."""
-    return(np.array(participant_pop[predict]))
+def gather_dv(participant_pop, predict, cutoff=0):
+    """
+    Returns a numpy vector of the predicted column. Cutoff is a percentage
+    (0 < p < 0.5). If cutoff specified, returns a binary vector (0 = lower than
+    cutoff, 1 = higher than cutoff). The maximum cutoff is 50%, or the median
+    of the sample.
+    """
+    y = np.array(participant_pop[predict])
+
+    if cutoff > 0:
+        cutoff = np.percentile(y, cutoff*100)
+        idx_lo = np.where(y < cutoff)[0]
+        idx_hi = np.where(y >= cutoff)[0]
+        y[idx_lo] = 0
+        y[idx_hi] = 1
+
+    return(y)
 
 
 def pickle_it(my_data, save_path):

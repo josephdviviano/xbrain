@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """
-xbrain is a tool for predicting non-neural scores of subjects using MRI data
-features.
+xbrain is a tool for relating non-neural scores and MRI data features.
 
 Usage:
     xbrain [options] <database>
@@ -10,9 +9,10 @@ Arguments:
     <database>      a .csv file containing MRI data (X) and non-neural data (Y)
 
 Options:
-    --timeseries    A comma-seperated list of timeseries .csv (2D) inputs to use as predictors.
-    --statmaps      A comma-seperated list of statmap .nii.gz (3D) inputs to use as predictors.
-    --predict       Column name in database to predict.
+    --timeseries    A comma-seperated list of timeseries .csv (2D) predictors.
+    --connectivity  A comma-seperated list of correlation matrix .csv (2D) predictors.
+    --statmaps      A comma-seperated list of statmap .nii.gz (3D) predictors.
+    --predict       A comma-seperated list of column names in database to predict.
     --roi_mask      A ROI .nii.gz file with the same dimensions as all input statmaps and the same number of non-zero ROIs as there are unique timeseries.
     --pct_template  Proportion (0 < p < 1) of population to serve as the template population for the outer loop [default: 0.1]
     --n             Number of monte-carlo simulations to run for the outer loop [default: 10]
@@ -20,6 +20,7 @@ Options:
     --k             Number of folds done for the inner loop cross-validation [default: 5]
     --cutoff        Percentile cutoff (0 < p < 0.5) to seperate the low and high y score group [default: 0.5]
     --two-template  Use a two template model: contrast high and low y scores.
+    --pre-test      Run a diagnostic pre-test (MDMR) relating the non-neural scores to the nerual features.
     --debug         Verbose outputs.
     --plot          Print out diagnostic plots to the home directory.
 
@@ -88,6 +89,10 @@ generalizability.
 
 xbrain -h or --help prints this message.
 """
+### everything is broken
+### try this
+### http://scikit-learn.org/stable/modules/outlier_detection.html#outlier-detection
+
 import sys, os
 import logging
 
@@ -108,10 +113,16 @@ logger = logging.getLogger(os.path.basename(__file__))
 
 HOME = os.path.expanduser('~')
 
+def assert_columns(db, columns):
+    if not utils.is_column(db, columns):
+        logger.error('not all columns {} found'.format(columns))
+        sys.exit(1)
+
 def main():
     #arguments = docopt(__doc__)
     #database     = arguments['<database>']
     #timeseries   = arguments['--timeseries']
+    #connectivity = arguments['--connectivity']
     #statmaps     = arguments['--statmaps']
     #predict      = arguments['--predict']
     #roi_mask     = arguments['--roi_mask']
@@ -121,6 +132,7 @@ def main():
     #k            = int(arguments['--k'])
     #cutoff       = float(arguments['--cutoff'])
     #two_template = arguments['--two-template']
+    #pre_test     = arguments['--pre-test']
     #debug        = arguments['--debug']
     #plot         = arguments['--plot']
 
@@ -128,18 +140,21 @@ def main():
 
     # for testing
     database = '/projects/jviviano/data/xbrain/assets/database_xbrain.csv'
-    timeseries = 'ts_imi'
+    timeseries = 'ts_ea1,ts_ea2,ts_ea3'
     statmaps = None
-    predict = 'Part1_TotalCorrect'
+    connectivity = None
+    #predict = 'Part1_TotalCorrect,Part2_TotalCorrect,Part3_TotalCorrect,scog_er40_cr_columnpcr_value,scog_er40_crt_columnqcrt_value'
+    predict = 'Diagnosis'
     roi_mask = None
-    pct_template = 0.30
-    n = 5
+    pct_template = 0.20
+    n = 1
     p = 0.5
-    k = 3
+    k = 5
     cutoff = 0.2
-    two_template = True
+    two_template = False
+    pre_test = False
     debug = True
-    plot = True
+    plot = False
 
     logger.info('starting')
     if debug:
@@ -149,7 +164,7 @@ def main():
     try:
         db = pd.read_csv(database)
     except:
-        logger.error('failed to parse input database {} (must be .csv format)',format(database))
+        logger.error('failed to parse input .csv database {}',format(database))
         sys.exit(1)
 
     # check and format inputs
@@ -159,59 +174,65 @@ def main():
         sys.exit(1)
 
     if not utils.is_probability(p):
-        logger.error('proportion of template population to use for each outer loop invalid: {} (0 < p < 1)'.format(p))
+        logger.error('proportion of template population to use for each inner loop invalid: {} (0 < p < 1)'.format(p))
         sys.exit(1)
 
     if not utils.is_probability(cutoff*2):
         logger.error('group cutoff percentile invalid: {} (0 < p < 0.5)'.format(cutoff))
         sys.exit(1)
 
+    # check all defined database columns
     if statmaps:
         statmaps = statmaps.split(',')
-        if not utils.is_column(db, statmaps):
-            logger.error('not all statmap columns {} defined in {}'.format(statmaps, database))
-            sys.exit(1)
+        assert_columns(db, timeseries)
         columns.extend(statmaps)
 
     if timeseries:
         timeseries = timeseries.split(',')
-        if not utils.is_column(db, timeseries):
-            logger.error('not all timeseries columns {} defined in {}'.format(timeseries, database))
-            sys.exit(1)
+        assert_columns(db, timeseries)
         columns.extend(timeseries)
 
-    if not utils.is_column(db, predict):
-        logger.error('prediction column {} not defined in {}'.format(predict, database))
-        sys.exit(1)
-    columns.append(predict)
+    predict = predict.split(',')
+    assert_columns(db, predict)
+    columns.extend(predict)
 
     # reducing data to defined columns
-    logger.debug('all columns in submitted database:\n{}'.format(db.columns))
     db = db[columns]
     n_pre = len(db)
     db = db.dropna(axis=0)
-    logger.debug('reduced columns: {}\nclean rows in database (no NaNs): {}/{}'.format(columns, len(db), n_pre))
+    logger.debug('clean rows in database: {}/{}'.format(len(db), n_pre))
 
     # pre-test: use MDMR to detect relationship between cognitive variables and
     # brain data. Cluster brain data, and show the mean cognitive score in each
     # cluster. Good v scores are ~ 0.1, or 10%.
-    #logger.debug('pre-test: detecting gross relationship between neural and cognitive data')
-    #ts = corr.get_template_ts(db, timeseries)
-    #X = corr.calc_xbrain(ts, db, timeseries, plot=False)
-    #y = utils.gather_dv(db, predict)
-    #F, F_null, v = stats.mdmr(y.T, X)
-    #thresholds = stats.sig_cutoffs(F_null, two_sided=False)
+    if pre_test:
+        logger.debug('pre-test: detecting gross relationship between neural and cognitive data')
+        ts = corr.get_template_ts(db, timeseries)
+        X = corr.calc_xbrain(ts, db, timeseries)
+        y = utils.gather_dv(db, predict)
+        F, F_null, v = stats.mdmr(y.T, X)
+        thresholds = stats.sig_cutoffs(F_null, two_sided=False)
 
-    #if F > thresholds[1]:
-    #    logger.info('pre-test: relationship detected: F={} > {}, variance explained={}'.format(F, thresholds[1], v))
-    #else:
-    #    logger.warn('pre-test: no relationship detected, variance explained={}'.format(v))
+        if F > thresholds[1]:
+            logger.info('pre-test: relationship detected: F={} > {}, variance explained={}'.format(F, thresholds[1], v))
+        else:
+            logger.warn('pre-test: no relationship detected, variance explained={}'.format(v))
 
-    #if plot:
-    #    clst = stats.cluster(X, y, plot=HOME)
+        if plot:
+            y = stats.pca_reduce(y)
+            clst = stats.cluster(X, y, plot=HOME)
+        sys.exit()
 
     logger.debug('generating dependent variable vector y')
-    y = utils.gather_dv(db, predict, cutoff=cutoff)
+    y = utils.gather_dv(db, predict)
+    if len(y.shape) == 2 and y.shape[0] > 1:
+        logger.debug('using PCA to reduce {} dvs down to 1 component'.format(y.shape[0]))
+        y = stats.pca_reduce(y)
+
+    # split into groups if the data is continuous
+    if len(np.unique(y)) > 10:
+        logger.debug('splitting dv into two groups: {} percentile cutoff'.format(cutoff))
+        y = utils.make_dv_groups(y, cutoff)
 
     r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
 
@@ -222,8 +243,12 @@ def main():
     #logger.debug('kfold cross-validation')
     #kf = KFold(len(y), n_folds=kfold)
 
-    logger.debug('Outer Loop: {} fold cross validation'.format(k))
+    logger.info('Outer Loop: {} fold cross validation'.format(k))
     for train_idx, test_idx in kf:
+
+        # split the outcome variables into train and test groups
+        y_train = y[train_idx]
+        y_test = y[test_idx]
 
         # split database into test and train groups
         test_db = db.iloc[test_idx]
@@ -237,22 +262,22 @@ def main():
             template_db_low = utils.find_template(train_db, np.ceil(n_template/2), predict, percentile=(1-cutoff)*100)
         else:
             logger.info('one template analysis ({}th percentile)'.format(cutoff))
-            template_db = utils.find_template(train_db, n_template, predict, percentile=cutoff*100)
+            template_db = utils.find_template(train_db, n_template, predict, percentile=75)
 
-        logger.debug('n template: {}/{}'.format(len(template_db), len(train_db)))
+        logger.debug('n template pop/n training pop: {}/{}'.format(len(template_db), len(train_db)))
         n_per_template = np.round(len(template_db)*p)
 
-        # monte carlo permutation: take random subsets of the template
+        # monte carlo permutation: take random subsets of the template population
         for i in range(n):
-            logger.debug('Inner Loop: template permutation {}/{}'.format(i+1, n+1))
+            logger.info('Inner Loop: template permutation {}/{}'.format(i+1, n))
             idx = np.sort(np.random.permutation(np.arange(len(template_db)))[:n_per_template])
 
             logger.debug('calculating xbrain correlations with template')
             ts = corr.get_template_ts(template_db.iloc[idx], timeseries)
 
             try:
-                X_train = corr.calc_xbrain(ts, train_db, timeseries, plot=plot)
-                X_test = corr.calc_xbrain(ts, test_db, timeseries, plot=plot)
+                X_train = corr.calc_xbrain(ts, train_db, timeseries)
+                X_test = corr.calc_xbrain(ts, test_db, timeseries)
             except Exception as e:
                 logger.error(e)
                 sys.exit(1)
@@ -262,35 +287,22 @@ def main():
                 ts_low = corr.get_template_ts(template_db_low.iloc[idx], timeseries)
 
                 try:
-                    X_train_low = corr.calc_xbrain(ts_low, train_db, timeseries, plot=plot)
-                    X_test_low = corr.calc_xbrain(ts_low, test_db, timeseries, plot=plot)
+                    X_train_low = corr.calc_xbrain(ts_low, train_db, timeseries)
+                    X_test_low = corr.calc_xbrain(ts_low, test_db, timeseries)
                 except Exception as e:
                     logger.error(e)
                     sys.exit(1)
 
-                    # plot the two feature matricies before taking ratio
-                    if plot:
-                        corr.plot_features(X_train, HOME, i, X_low=X_train_low)
-
                 X_train = X_train - X_train_low # take difference
                 X_test = X_test - X_test_low    #
-                X_train[np.isnan(X_train)] = 0  # remove nonsense values
-                X_test[np.isnan(X_test)] = 0    #
-                X_train[np.isinf(X_train)] = 0  #
-                X_test[np.isinf(X_test)] = 0    #
-                y_train = utils.gather_dv(train_db, predict, cutoff=cutoff)
-                y_test = utils.gather_dv(test_db, predict, cutoff=cutoff)
 
-            if plot:
-                corr.plot_features(X_train, HOME, i)
-
-            if plot:
-                plotpath = HOME
-            else:
-                plotpath = None
+            X_train[np.isnan(X_train)] = 0  # remove nonsense values
+            X_test[np.isnan(X_test)] = 0    #
+            X_train[np.isinf(X_train)] = 0  #
+            X_test[np.isinf(X_test)] = 0    #
 
             try:
-                results = stats.classify(X_train, X_test, y_train, y_test, plot=plotpath)
+                results = stats.classify(X_train, X_test, y_train, y_test)
             except Exception as e:
                 logger.error(e)
                 sys.exit(1)

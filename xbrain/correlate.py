@@ -29,7 +29,7 @@ def pct_signal_change(ts):
     return(((ts-means)/means) * 100)
 
 
-def calc_xbrain(template_ts, participant_pop, timeseries, plot=False):
+def calc_xbrain(template_ts, participant_pop, timeseries):
     """
     Calculates correlation of each participant in the dataframe participant_pop
     with the appropriate slice of the input template matrix. The features are

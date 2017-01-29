@@ -11,6 +11,7 @@ import numpy as np
 import scipy as sp
 import scipy.cluster.hierarchy as sch
 from scipy import stats
+from scipy import linalg
 from scipy.stats import mode
 import pandas as pd
 from sklearn import preprocessing
@@ -74,7 +75,7 @@ def hat_matrix(X):
     Caluclates distance-based hat matrix for an NxM matrix of M predictors from
     N variables. Adds the intercept term for you.
     """
-    X = np.hstack((np.ones((X.shape[0], 1)), np.atleast_2d(X).T)) # add intercept
+    X = np.hstack((np.ones((X.shape[0], 1)), X)) # add intercept
     Q1, R1 = np.linalg.qr(X)
     H = Q1.dot(Q1.T)
 
@@ -188,6 +189,37 @@ def individual_importances(X, Y):
     return V
 
 
+def pca_reduce(X, n=1):
+    """Uses PCA to return the top n components of the data as a matrix."""
+
+    mean = np.mean(X, axis=0)
+
+    # calculate the covariance matrix from centered data
+    X = X - np.mean(X)
+    R = np.cov(X, rowvar=True)
+
+    # calculate eigenvectors & eigenvalues of the covariance matrix
+    evals, evecs = linalg.eigh(R)
+
+    # sort by explained variance
+    idx = np.argsort(evals)[::-1]
+    evecs = evecs[:, idx]
+    evals = evals[idx]
+
+    # reduce to n components
+    evecs = evecs[:, :n]
+    recon = np.dot(evecs.T, X)
+
+    # sign flip to match mean if only taking one component
+    if n == 1:
+        recon = recon.flatten()
+        corr = np.corrcoef(np.vstack((recon, mean)))[0,1]
+        if corr < 0:
+            recon = recon * -1
+
+    return(recon)
+
+
 def cv_loop(model_clf, hyperparams, X_train, y_train):
     """
     Uses cross validation to do a grid search on the hyperparameter dictionary
@@ -206,7 +238,7 @@ def make_classes(y):
     return(le.transform(y))
 
 
-def classify(X_train, X_test, y_train, y_test, model='RFC', plot=None):
+def classify(X_train, X_test, y_train, y_test, model='RFC'):
     """
     Trains the selected classifier once on the submitted training data, and
     compares the predicted outputs of the test data with the real labels.
@@ -229,21 +261,25 @@ def classify(X_train, X_test, y_train, y_test, model='RFC', plot=None):
         hyperparams = {'alpha':[0.2, 0.1, 0.05, 0.01]}
         scale_data = True
         feat_imp = True
+        continuous = True
     elif model == 'SVR':
         model_clf = SVR()
         hyperparams = {'kernel':['linear','rbf'], 'C':[1,10,25]}
         scale_data = True
         feat_imp = True
+        continuous = True
     elif model == 'RFR':
         model_clf = RandomForestRegressor(n_jobs=6)
         hyperparams = {'n_estimators':[10,50,100,200,500], 'min_samples_split':[2,5,10,20,50]}
         scale_data = False
         feat_imp = True
+        continuous = True
     elif model == 'RFC':
         model_clf = RandomForestClassifier(n_jobs=6)
         hyperparams = {'n_estimators':[10,50,100,200,500], 'min_samples_split':[2,5,10,20,50]}
         scale_data = False
         feat_imp = True
+        continuous = False
     else:
         logger.error('invalid model type {}'.format(model))
         sys.exit(1)
@@ -265,21 +301,20 @@ def classify(X_train, X_test, y_train, y_test, model='RFC', plot=None):
     logger.debug('most frequent hp: {}'.format(hp_mode))
 
     # collect test / training data stats
-    r_train = stats.pearsonr(clf.predict(X_train), y_train)[0] # remove p vals
-    r_test = stats.pearsonr(clf.predict(X_test), y_test)[0]    #
+    if continuous:
+        # ignore p values returned by pearsonr
+        r_train = stats.pearsonr(clf.predict(X_train), y_train)[0]
+        r_test = stats.pearsonr(clf.predict(X_test), y_test)[0]
+    else:
+        r_train = np.mean(clf.predict(X_train) == y_train)
+        r_test = np.mean(clf.predict(X_test) == y_test)
+
     R2_train = clf.score(X_train, y_train)
     R2_test = clf.score(X_test, y_test)
     MSE_train = mse(clf.predict(X_train), y_train)
     MSE_test = mse(clf.predict(X_test), y_test)
 
-    # print out model accuracy
-    if plot:
-        uid = ''.join(random.choice(string.ascii_lowercase) for i in range(6))
-        plt.scatter(clf.predict(X_test), y_test)
-        plt.xlabel('predictions')
-        plt.ylabel('true scores')
-        plt.savefig(os.path.join(plot, 'test_predict_{}.pdf'.format(uid)))
-        plt.close()
+    logger.debug('predictions,true values\n{}'.format(np.vstack((clf.predict(X_test),  y_test))))
 
     # check feature importance (QC for HC importance)
     # for fid in np.arange(10):

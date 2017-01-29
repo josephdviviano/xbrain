@@ -113,23 +113,36 @@ def is_even(n):
     return False
 
 
-def gather_dv(participant_pop, predict, cutoff=0):
+def gather_dv(db, columns):
     """
     Returns a numpy vector of the predicted column. Cutoff is a percentage
     (0 < p < 0.5). If cutoff specified, returns a binary vector (0 = lower than
     cutoff, 1 = higher than cutoff). The maximum cutoff is 50%, or the median
     of the sample.
     """
-    y = np.array(participant_pop[predict])
-
-    if cutoff > 0:
-        cutoff = np.percentile(y, cutoff*100)
-        idx_lo = np.where(y < cutoff)[0]
-        idx_hi = np.where(y >= cutoff)[0]
-        y[idx_lo] = 0
-        y[idx_hi] = 1
+    for i, col in enumerate(columns):
+        tmp = np.array(db[col])
+        if i == 0:
+            y = tmp
+        else:
+            y = np.vstack((y, tmp))
 
     return(y)
+
+
+def make_dv_groups(y, cutoff):
+    """
+    Accepts a numpy vector of the dependent variable y. All scores lower than
+    the submitted percentile cutoff are set to 0, and the rest are set to 1.
+    Used to turn continuous variables into groups for outlier detection.
+    """
+    cutoff = np.percentile(y, cutoff*100)
+    idx_lo = np.where(y < cutoff)[0]
+    idx_hi = np.where(y >= cutoff)[0]
+    y[idx_lo] = 0
+    y[idx_hi] = 1
+
+    return y
 
 
 def pickle_it(my_data, save_path):

@@ -50,38 +50,6 @@ def scrub_data(x):
     return x
 
 
-def find_template(db, n_template, predict, percentile=50):
-    """
-    Copies a subset of the input database into a template database, which is n
-    subjects of the input population with values closest to the target y score
-    of interest (by percentile, default is the median, or 50%). Always picks an
-    actual sample for the target percentile, therefore, if an even number of
-    values is submitted, will take the value greater than the midpoint value
-    normally calculated for the median.
-    """
-    db = db.sort(predict)
-
-    # find the target value without taking midpoints (favor higher value)
-    target = np.percentile(db[predict], percentile, interpolation='higher')
-    target_idx = np.percentile(np.where(db[predict] == target)[0], 50, interpolation='lower')
-    logger.debug('target percentile={}, score={}'.format(percentile, target))
-
-    # get template indicies
-    if is_even(n_template):
-        idx_lo = target_idx - n_template/2
-        idx_hi = target_idx + n_template/2
-    else:
-        idx_lo = target_idx - np.floor(n_template/2.0)
-        idx_hi = target_idx + np.ceil(n_template/2.0)
-
-    # split database into template and participant samples
-    template_idx = np.arange(idx_lo, idx_hi+1)
-    logger.debug('template subjects: {} - {}'.format(int(idx_lo), int(idx_hi)))
-    template = db.iloc[template_idx]
-
-    return template
-
-
 def is_probability(x):
     """True if x is a float between 0 and 1, otherwise false."""
     if x > 0 and x < 1:

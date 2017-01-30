@@ -85,6 +85,64 @@ def get_template_ts(template, timeseries):
     return template_ts
 
 
+def find_template(db, n_template, y, timeseries, percentile=50, group=-1):
+    """
+    Copies a subset of the input database into a template database.
+
+    Can be run in two modes: 'group' and 'percentile'.
+
+    If group is defined (greater than -1), a random number (n_template) of
+    subjects are used from that group to construct the template. If n_template
+    is greater than the number of subjects available in the group, this will
+    use all of them.
+
+    If group is not defined, this will take the defined percentile of the input
+    variable y. This will take n_subjects closest to the defined percentile. If
+    n_subjects is larger than the number of available subjects in the database,
+    this will use all of them.
+    """
+    if group > -1:
+
+        # subset database to the group of interest
+        template = db.loc[db[y] == group]
+
+        # shuffle rows
+        template = template.iloc[np.random.permutation(len(template))]
+
+        # if we get a valid n_template input, take a subset of the subjects
+        if n_template < len(template):
+            template = template.iloc[:n_template]
+
+    else:
+        db = db.sort(y) # sort database so similar y values are in adjacent rows
+        db = db.reset_index(drop=True) # renumber rows for easy indexing
+
+        # find the target value without taking midpoints (favor higher value)
+        target = np.percentile(db[y], percentile, interpolation='higher')
+        target_idx = np.percentile(db.loc[db[y] == target].index, 50, interpolation='lower')
+        logger.debug('target percentile={}, score={}'.format(percentile, target))
+
+        # get template indicies
+        idx_lo = target_idx - np.floor(n_template/2.0)
+        idx_hi = target_idx + np.ceil(n_template/2.0)
+
+        # remove impossible indicies
+        if idx_hi >= len(db):
+            idx_hi = len(db)-1 # correct for 0-based indexing
+        if idx_lo < 0:
+            idx_lo = 0
+
+        # take subset of the subjects (or use the whole test set)
+        template_idx = np.arange(idx_lo, idx_hi+1)
+        logger.debug('template subjects: {} - {}'.format(int(idx_lo), int(idx_hi)))
+        template = db.loc[template_idx]
+
+    # get mean template timeseries
+    ts = get_template_ts(template, timeseries)
+
+    return ts
+
+
 def plot_features(X, path, i, X_low=None):
     """
     Plots the cross brain correlation features calculated. In the two-template

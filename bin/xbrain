@@ -14,12 +14,13 @@ Options:
     --statmaps      A comma-seperated list of statmap .nii.gz (3D) predictors.
     --predict       A comma-seperated list of column names in database to predict.
     --roi_mask      A ROI .nii.gz file with the same dimensions as all input statmaps and the same number of non-zero ROIs as there are unique timeseries.
-    --pct_template  Proportion (0 < p < 1) of population to serve as the template population for the outer loop [default: 0.1]
-    --n             Number of monte-carlo simulations to run for the outer loop [default: 10]
-    --p             Proportion (0 < p < 1) of template subjects taken for each outer loop simulation [default: 0.5]
+    --pct_template  Proportion (0 < p < 1) of training population used to generate template timeseries [default: 0.1]
     --k             Number of folds done for the inner loop cross-validation [default: 5]
-    --cutoff        Percentile cutoff (0 < p < 0.5) to seperate the low and high y score group [default: 0.5]
-    --two-template  Use a two template model: contrast high and low y scores.
+    --n_features    Number of tagret features per subject. If the number of raw features is larger than this number, uses PCA to reduce the data to this number.
+    --target-mode   'cutoff' or 'group' [default: 'cutoff']
+    --target-cutoff Percentile cutoff (0 < p < 0.5) to seperate the low and high y score group [default: 0.5]
+    --target-group  For classification tasks, draw the template from this group [default: 1]
+    --two-template  Use a two template model: contrast high (group = 1) and low (group = 0) y scores.
     --pre-test      Run a diagnostic pre-test (MDMR) relating the non-neural scores to the nerual features.
     --debug         Verbose outputs.
     --plot          Print out diagnostic plots to the home directory.
@@ -89,12 +90,11 @@ generalizability.
 
 xbrain -h or --help prints this message.
 """
-### everything is broken
-### try this
-### http://scikit-learn.org/stable/modules/outlier_detection.html#outlier-detection
 
 import sys, os
 import logging
+import random
+import string
 
 import numpy as np
 import scipy as sp
@@ -120,37 +120,40 @@ def assert_columns(db, columns):
 
 def main():
     #arguments = docopt(__doc__)
-    #database     = arguments['<database>']
-    #timeseries   = arguments['--timeseries']
-    #connectivity = arguments['--connectivity']
-    #statmaps     = arguments['--statmaps']
-    #predict      = arguments['--predict']
-    #roi_mask     = arguments['--roi_mask']
-    #pct_template = float(arguments['--pct_template'])
-    #n            = int(arguments['--n'])
-    #p            = float(arguments['--p'])
-    #k            = int(arguments['--k'])
-    #cutoff       = float(arguments['--cutoff'])
-    #two_template = arguments['--two-template']
-    #pre_test     = arguments['--pre-test']
-    #debug        = arguments['--debug']
-    #plot         = arguments['--plot']
+    #database      = arguments['<database>']
+    #timeseries    = arguments['--timeseries']
+    #connectivity  = arguments['--connectivity']
+    #statmaps      = arguments['--statmaps']
+    #predict       = arguments['--predict']
+    #roi_mask      = arguments['--roi_mask']
+    #pct_template  = float(arguments['--pct_template'])
+    #k             = int(arguments['--k'])
+    #n_features    = arguments['--n-features']
+    #target_mode   = arguments['--target-mode']
+    #target_cutoff = float(arguments['--cutoff'])
+    #target_group  = int(arguments['--target-group'])
+    #two_template  = arguments['--two-template']
+    #pre_test      = arguments['--pre-test']
+    #debug         = arguments['--debug']
+    #plot          = arguments['--plot']
 
     global HOME
 
     # for testing
     database = '/projects/jviviano/data/xbrain/assets/database_xbrain.csv'
-    timeseries = 'ts_ea1,ts_ea2,ts_ea3'
+    timeseries = 'ts_imi'
     statmaps = None
     connectivity = None
     #predict = 'Part1_TotalCorrect,Part2_TotalCorrect,Part3_TotalCorrect,scog_er40_cr_columnpcr_value,scog_er40_crt_columnqcrt_value'
-    predict = 'Diagnosis'
+    predict = 'Part1_TotalCorrect,Part2_TotalCorrect,Part3_TotalCorrect'
+    #predict = 'Diagnosis'
     roi_mask = None
-    pct_template = 0.20
-    n = 1
-    p = 0.5
+    pct_template = 0.50
     k = 5
-    cutoff = 0.2
+    n_features = 10
+    target_mode = 'cutoff'
+    target_cutoff = 0.2
+    target_group = 1
     two_template = False
     pre_test = False
     debug = True
@@ -168,20 +171,33 @@ def main():
         sys.exit(1)
 
     # check and format inputs
-    columns = []
     if not utils.is_probability(pct_template):
         logger.error('proportion of population to be template invalid: {} (0 < p < 1)'.format(pct_template))
         sys.exit(1)
 
-    if not utils.is_probability(p):
-        logger.error('proportion of template population to use for each inner loop invalid: {} (0 < p < 1)'.format(p))
+    if target_mode != 'group' and target_mode != 'cutoff':
+        logger.error('target_mode {} invalid (should be either "group" or "cutoff"'.format(target_mode))
         sys.exit(1)
 
-    if not utils.is_probability(cutoff*2):
-        logger.error('group cutoff percentile invalid: {} (0 < p < 0.5)'.format(cutoff))
-        sys.exit(1)
+    if target_mode == 'group' and two_template:
+        logger.info('group target mode is not implemented for two_template analysis, reverting to single template')
+        two_template = False
+
+    if two_template:
+        if not utils.is_probability(target_cutoff*2):
+            logger.error('group target_cutoff percentile invalid for two group analysis: {} (0 < p < 0.5)'.format(target_cutoff))
+            sys.exit(1)
+    else:
+        if not utils.is_probability(target_cutoff):
+            logger.error('group target_cutoff percentile invalid for one group analysis: {} (0 < p < 1)'.format(target_cutoff))
+            sys.exit(1)
+
+    if n_features:
+        n_features = int(n_features)
+
 
     # check all defined database columns
+    columns = []
     if statmaps:
         statmaps = statmaps.split(',')
         assert_columns(db, timeseries)
@@ -196,7 +212,7 @@ def main():
     assert_columns(db, predict)
     columns.extend(predict)
 
-    # reducing data to defined columns
+    # reduce data to defined columns
     db = db[columns]
     n_pre = len(db)
     db = db.dropna(axis=0)
@@ -226,22 +242,34 @@ def main():
     logger.debug('generating dependent variable vector y')
     y = utils.gather_dv(db, predict)
     if len(y.shape) == 2 and y.shape[0] > 1:
-        logger.debug('using PCA to reduce {} dvs down to 1 component'.format(y.shape[0]))
+        logger.info('using PCA to reduce {} dvs down to 1 component'.format(y.shape[0]))
         y = stats.pca_reduce(y)
+
+    # add a column with the (potentially aggregated) y scores, before thresholds
+    y_uid = ''.join(random.choice(string.ascii_uppercase) for _ in range(10))
+    db[y_uid] = y
 
     # split into groups if the data is continuous
     if len(np.unique(y)) > 10:
-        logger.debug('splitting dv into two groups: {} percentile cutoff'.format(cutoff))
-        y = utils.make_dv_groups(y, cutoff)
+        logger.debug('splitting dv into two groups: {} percentile cutoff'.format(target_cutoff))
+        y = utils.make_dv_groups(y, target_cutoff)
 
-    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
+    # ensure target_group is one of the available groups in y
+    if target_group not in np.unique(y):
+        logger.error('target group {} not in y: {}'.format(target_group, np.unique(y)))
+        sys.exit(1)
 
     # stratified k-fold cross validation: split into train and test sets
     y_labels = stats.make_classes(y)
     logger.debug('stratified kfold cross-validation')
     kf = StratifiedKFold(y_labels, n_folds=k)
+
+    # when I put in the regression / classification flag, use this
     #logger.debug('kfold cross-validation')
     #kf = KFold(len(y), n_folds=kfold)
+
+    # stores outputs across folds
+    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test = [], [], [], [], [], []
 
     logger.info('Outer Loop: {} fold cross validation'.format(k))
     for train_idx, test_idx in kf:
@@ -250,71 +278,57 @@ def main():
         y_train = y[train_idx]
         y_test = y[test_idx]
 
-        # split database into test and train groups
-        test_db = db.iloc[test_idx]
-        train_db = db.iloc[train_idx]
+        # calculate the size of each template
+        n_template = np.round(db.iloc[train_idx].shape[0] * pct_template)
+        logger.debug('n template/n training pop: {}/{}'.format(n_template, len(train_idx)))
 
-        # extract a set of template subjects from the train sample
-        n_template = np.round(train_db.shape[0] * pct_template)
+        # calculate X from a template generated from the training sample
         if two_template:
-            logger.info('two template analysis ({}th percentile, {}th percentile)'.format(cutoff, 1-cutoff))
-            template_db = utils.find_template(train_db, np.ceil(n_template/2), predict, percentile=cutoff*100)
-            template_db_low = utils.find_template(train_db, np.ceil(n_template/2), predict, percentile=(1-cutoff)*100)
+            logger.info('two template analysis ({}th percentile, {}th percentile)'.format(target_cutoff, 1-target_cutoff))
+            ts_hi = corr.find_template(db.iloc[train_idx], np.ceil(n_template/2), y_uid, timeseries, percentile=target_cutoff*100)
+            ts_lo = corr.find_template(db.iloc[train_idx], np.ceil(n_template/2), y_uid, timeseries, percentile=(1-target_cutoff)*100)
+            X_hi = corr.calc_xbrain(ts, db, timeseries)
+            X_lo = corr.calc_xbrain(ts, db, timeseries)
+            X = X_hi - X_lo
         else:
-            logger.info('one template analysis ({}th percentile)'.format(cutoff))
-            template_db = utils.find_template(train_db, n_template, predict, percentile=75)
+            if target_mode == 'cutoff':
+                logger.info('one template analysis ({}th percentile)'.format(target_cutoff))
+                ts = corr.find_template(db.iloc[train_idx], n_template, y_uid, timeseries, percentile=(1-target_cutoff)*100)
+            else:
+                logger.info('one template analysis (target group={})'.format(target_group))
+                ts = corr.find_template(db.iloc[train_idx], n_template, y_uid, timeseries, group=target_group)
+            X = corr.calc_xbrain(ts, db, timeseries)
 
-        logger.debug('n template pop/n training pop: {}/{}'.format(len(template_db), len(train_db)))
-        n_per_template = np.round(len(template_db)*p)
+        # remove nonsense values from X
+        X[np.isnan(X)] = 0
+        X[np.isinf(X)] = 0
 
-        # monte carlo permutation: take random subsets of the template population
-        for i in range(n):
-            logger.info('Inner Loop: template permutation {}/{}'.format(i+1, n))
-            idx = np.sort(np.random.permutation(np.arange(len(template_db)))[:n_per_template])
+        if n_features:
+            if X.shape[1] > n_features:
+                # double transpose required to reduce over features, not samples
+                X = stats.pca_reduce(X.T, n=n_features).T
 
-            logger.debug('calculating xbrain correlations with template')
-            ts = corr.get_template_ts(template_db.iloc[idx], timeseries)
+        print(X.shape)
 
-            try:
-                X_train = corr.calc_xbrain(ts, train_db, timeseries)
-                X_test = corr.calc_xbrain(ts, test_db, timeseries)
-            except Exception as e:
-                logger.error(e)
-                sys.exit(1)
+        # split X into test and train groups
+        X_train = X[train_idx, :]
+        X_test  = X[test_idx, :]
 
-            if two_template:
-                logger.debug('calculating difference of high and low templates')
-                ts_low = corr.get_template_ts(template_db_low.iloc[idx], timeseries)
+        # run the classifier
+        try:
+            results = stats.classify(X_train, X_test, y_train, y_test)
+        except Exception as e:
+            logger.error(e)
+            sys.exit(1)
 
-                try:
-                    X_train_low = corr.calc_xbrain(ts_low, train_db, timeseries)
-                    X_test_low = corr.calc_xbrain(ts_low, test_db, timeseries)
-                except Exception as e:
-                    logger.error(e)
-                    sys.exit(1)
-
-                X_train = X_train - X_train_low # take difference
-                X_test = X_test - X_test_low    #
-
-            X_train[np.isnan(X_train)] = 0  # remove nonsense values
-            X_test[np.isnan(X_test)] = 0    #
-            X_train[np.isinf(X_train)] = 0  #
-            X_test[np.isinf(X_test)] = 0    #
-
-            try:
-                results = stats.classify(X_train, X_test, y_train, y_test)
-            except Exception as e:
-                logger.error(e)
-                sys.exit(1)
-
-            # append the results of each iteration (representing a single
-            # template permutation for a single fold).
-            r_train.append(results['r_train'])
-            r_test.append(results['r_test'])
-            R2_train.append(results['R2_train'])
-            R2_test.append(results['R2_test'])
-            MSE_train.append(results['MSE_train'])
-            MSE_test.append(results['MSE_test'])
+        # append the results of each iteration (representing a single
+        # template permutation for a single fold).
+        r_train.append(results['r_train'])
+        r_test.append(results['r_test'])
+        R2_train.append(results['R2_train'])
+        R2_test.append(results['R2_test'])
+        MSE_train.append(results['MSE_train'])
+        MSE_test.append(results['MSE_test'])
 
         # print intermediate aggregate stats
         logger.debug('train scores:\n    r   ={:04.2f}+/-{:04.2f}\n    R2  ={:04.2f}+/-{:04.2f}\n    MSE ={:04.2f}+/-{:04.2f}'.format(

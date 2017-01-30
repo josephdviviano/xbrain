@@ -17,8 +17,10 @@ import pandas as pd
 from sklearn import preprocessing
 from sklearn import grid_search
 from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.linear_model import Lasso
 from sklearn.svm import SVR
+from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import mean_squared_error as mse
@@ -206,6 +208,11 @@ def pca_reduce(X, n=1):
     evecs = evecs[:, idx]
     evals = evals[idx]
 
+    # normalize evals to calculate % variance
+    evals = evals / np.sum(evals)
+    evals = evals[:n]
+    logger.debug('PCA reduction: variance retained: {}'.format(np.sum(evals)))
+
     # reduce to n components
     evecs = evecs[:, :n]
     recon = np.dot(evecs.T, X)
@@ -238,7 +245,7 @@ def make_classes(y):
     return(le.transform(y))
 
 
-def classify(X_train, X_test, y_train, y_test, model='RFC'):
+def classify(X_train, X_test, y_train, y_test, model='Logistic'):
     """
     Trains the selected classifier once on the submitted training data, and
     compares the predicted outputs of the test data with the real labels.
@@ -253,7 +260,7 @@ def classify(X_train, X_test, y_train, y_test, model='RFC'):
 
     hp_dict = collections.defaultdict(list)
     hp_mode = {}
-    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test, pred_scores, real_scores = [], [], [], [], [], [], [], []
+    r_train, r_test, R2_train, R2_test, MSE_train, MSE_test = [], [], [], [], [], []
 
     # for testing various models, includes grid search settings
     if model == 'LR_L1':
@@ -262,21 +269,33 @@ def classify(X_train, X_test, y_train, y_test, model='RFC'):
         scale_data = True
         feat_imp = True
         continuous = True
+    elif model == 'Logistic':
+        model_clf = LogisticRegression()
+        hyperparams = {'C': [0.2, 0.6, 0.8, 1, 1.2] }
+        scale_data = True
+        feat_imp = False
+        continuous = False
     elif model == 'SVR':
         model_clf = SVR()
         hyperparams = {'kernel':['linear','rbf'], 'C':[1,10,25]}
         scale_data = True
         feat_imp = True
         continuous = True
+    elif model == 'SVC':
+        model_clf = SVC()
+        hyperparams = {'kernel':['linear','rbf'], 'C':[1,10,25]}
+        scale_data = True
+        feat_imp = True
+        continuous = False
     elif model == 'RFR':
         model_clf = RandomForestRegressor(n_jobs=6)
-        hyperparams = {'n_estimators':[10,50,100,200,500], 'min_samples_split':[2,5,10,20,50]}
+        hyperparams = {'n_estimators':[50,100,200], 'min_samples_split':[5, 10, 20,50]}
         scale_data = False
         feat_imp = True
         continuous = True
     elif model == 'RFC':
         model_clf = RandomForestClassifier(n_jobs=6)
-        hyperparams = {'n_estimators':[10,50,100,200,500], 'min_samples_split':[2,5,10,20,50]}
+        hyperparams = {'n_estimators':[50,100,200], 'min_samples_split':[5, 10, 20,50]}
         scale_data = False
         feat_imp = True
         continuous = False
@@ -328,9 +347,7 @@ def classify(X_train, X_test, y_train, y_test, model='RFC'):
             'R2_test':   R2_test,
             'MSE_train': MSE_train,
             'MSE_test':  MSE_test,
-            'hp_dict':   hp_dict,
-            'pred_scores': clf.predict(X_test),
-            'real_scores': y_test}
+            'hp_dict':   hp_dict}
 
 
 def cluster(X, y, plot=None, n_clust=2):

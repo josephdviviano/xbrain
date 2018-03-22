@@ -1,0 +1,18 @@
+dynamics:
+  win_length: 30
+  win_step: 4
+  n_states: 5
+
+classify:
+  logistic:
+    C: np.arange(0.1, 2.1, 0.1)
+  SVC:
+    max_iter: 10000
+    tol: 0.00001
+    C: [-20, 5]
+  RF:
+    n_estimators: 2000
+
+biotype:
+  regs: [1000]
+  n_ccs: [2, 10]
